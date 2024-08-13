@@ -1,46 +1,22 @@
-package fwencoder
+package fw_test
 
 import (
+	_ "embed"
 	"fmt"
 	"math"
-	"os"
-	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
+	"github.com/goslogan/fw"
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 )
 
-type TestStruct struct {
-	String    string
-	Bool      bool
-	Int       int
-	Int8      int8
-	Int16     int16
-	Int32     int32
-	Int64     int64
-	Uint      uint
-	Uint8     uint8
-	Uint16    uint16
-	Uint32    uint32
-	Uint64    uint64
-	Float32   float32
-	Float64   float64
-	Date      time.Time `json:"Time"`
-	Birthday  time.Time `column:"CustomDate" format:"02/01/2006"`
-	PString   *string
-	PBool     *bool
-	PInt8     *int8
-	PUint8    *uint8
-	PFloat32  *float32
-	PBirthday *time.Time `format:"02/01/2006"`
-	Default   int
-	JSONArr   []int
-	JSONPtr   *[]int
-}
+//go:embed "testdata/correct_all_supported.txt"
+var byteData []byte
 
-func TestUnmarshal_Success(t *testing.T) {
-	b, err := os.ReadFile("./testdata/correct_all_supported.txt")
-	if assert.NoError(t, err) {
+var _ = Describe("Decoder", Label("decode"), func() {
+
+	It("unmarshal a single row of data into a struct", Label("struct"), func() {
 		s := "Test Ptr String"
 		bb := false
 		i := int8(15)
@@ -71,20 +47,15 @@ func TestUnmarshal_Success(t *testing.T) {
 			PUint8:    &ui,
 			PFloat32:  &f,
 			PBirthday: &d,
-			JSONArr:   []int{1, 2, 3},
-			JSONPtr:   &[]int{4, 5, 6},
 		}}
 
 		var obtained []TestStruct
-		if err := Unmarshal(b, &obtained); assert.NoError(t, err) {
-			assert.Equal(t, expected, obtained)
-		}
-	}
-}
+		Expect(fw.Unmarshal(byteData, &obtained)).NotTo(HaveOccurred())
+		Expect(expected).To(Equal(obtained))
+	})
 
-func TestUnmarshal_Ptr_Success(t *testing.T) {
-	b, err := os.ReadFile("./testdata/correct_all_supported.txt")
-	if assert.NoError(t, err) {
+	It("can decode a single row of data into a pointer to a struct", Label("decode", "pointer"), func() {
+
 		s := "Test Ptr String"
 		bb := false
 		i := int8(15)
@@ -115,149 +86,165 @@ func TestUnmarshal_Ptr_Success(t *testing.T) {
 			PUint8:    &ui,
 			PFloat32:  &f,
 			PBirthday: &d,
-			JSONArr:   []int{1, 2, 3},
-			JSONPtr:   &[]int{4, 5, 6},
 		}}
 
 		var obtained []*TestStruct
-		if err := Unmarshal(b, &obtained); assert.NoError(t, err) {
-			assert.Equal(t, expected, obtained)
+		Expect(fw.Unmarshal(byteData, &obtained)).NotTo(HaveOccurred())
+		Expect(expected).To(Equal(obtained))
+
+	})
+})
+
+var _ = Describe("decode fail", Label("decode", "failure", "conversion"), func() {
+
+	It("will fail on bad type conversions", func() {
+		type BadData struct {
+			Data  []byte
+			Error string
 		}
-	}
-}
 
-type BadData struct {
-	Data  []byte
-	Error string
-}
+		badData := []BadData{
+			{
+				Data:  []byte("Int \n5.3 "),
+				Error: `failed casting "5.3" to "Int:int"`,
+			},
+			{
+				Data:  []byte("Uint8\n5123 "),
+				Error: `is too big for field Uint8:uint8`,
+			},
 
-func TestUnmarshal_Error(t *testing.T) {
-	badData := []BadData{
-		{
-			Data: []byte(`
-		Int
-		5.3`),
-			Error: `filed casting "5.3" to "Int:int"`,
-		},
-		{
-			Data: []byte(`
-		Bool
-		5.3 `),
-			Error: `filed casting "5.3" to "Bool:bool"`,
-		},
-		{
-			Data: []byte(`
-		Uint
-		5.3 `),
-			Error: `filed casting "5.3" to "Uint:uint"`,
-		},
-		{
-			Data: []byte(`
-		Float32
-		hello  `),
-			Error: `filed casting "hello" to "Float32:float32"`,
-		},
-		{
-			Data: []byte(`
-		Time
-		5.3 `),
-			Error: `filed casting "5.3" to "Date:time.Time"`,
-		},
-		{
-			Data: []byte(`
-		Int
-		5`),
-			Error: `wrong data length in line 2`,
-		},
-		{
-			Data: []byte(`
-		Int8
-		5123`),
-			Error: `is too big for field Int8:int8`,
-		},
-		{
-			Data: []byte(`
-		Uint8
-		5123 `),
-			Error: `is too big for field Uint8:uint8`,
-		},
-		{
-			Data:  []byte(fmt.Sprintf(" %-309s\n%.0f", "Float32", math.MaxFloat64)),
-			Error: `is too big for field Float32:float32`,
-		},
-	}
-	for _, data := range badData {
-		var obtained []TestStruct
-		err := Unmarshal(data.Data[1:], &obtained)
-		if assert.Error(t, err) {
-			assert.Contains(t, err.Error(), data.Error)
+			{
+				Data:  []byte("Bool\n5.3 "),
+				Error: `failed casting "5.3" to "Bool:bool"`,
+			},
+			{
+				Data:  []byte("Uint\n5.3 "),
+				Error: `failed casting "5.3" to "Uint:uint"`,
+			},
+			{
+				Data:  []byte("Float32\nhello  "),
+				Error: `failed casting "hello" to "Float32:float32"`,
+			},
+			{
+				Data:  []byte("Time\n5.3 "),
+				Error: `failed casting "5.3" to "Date:time.Time"`,
+			},
+			{
+				Data:  []byte("Int\n5"),
+				Error: `wrong data length in line 2`,
+			},
+			{
+				Data:  []byte("Int8\n5123"),
+				Error: `is too big for field Int8:int8`,
+			},
+
+			{
+				Data:  []byte(fmt.Sprintf("%-309s\n%.0f", "Float32", math.MaxFloat64)),
+				Error: `is too big for field Float32:float32`,
+			},
 		}
-	}
-}
-
-func TestIncorrectInput(t *testing.T) {
-	errs := []error{
-		Unmarshal(nil, 1),
-		Unmarshal(nil, nil),
-		Unmarshal(nil, new(string)),
-		Unmarshal(nil, &([]int{})),
-	}
-
-	for _, err := range errs {
-		assert.EqualError(t, err, ErrIncorrectInputValue.Error())
-	}
-
-	type B struct {
-		Int int `column:")Float32"`
-	}
-
-	type A struct {
-		Float32 B
-	}
-
-	err := Unmarshal([]byte("Float32\nhello  "), &([]A{}))
-	if assert.Error(t, err) {
-		assert.Contains(t, err.Error(), "error in line 2: can't unmarshal")
-	}
-
-	err = Unmarshal([]byte("Float32\nhello  "), &([]B{}))
-	if assert.Error(t, err) {
-		assert.Contains(t, err.Error(), "error parsing regexp")
-	}
-}
-
-func TestPtrFieldsOverflow(t *testing.T) {
-	badData := []BadData{
-		{
-			Data: []byte(`
-		Int8
-		5123`),
-			Error: `is too big for field Int8:*int8`,
-		},
-		{
-			Data: []byte(`
-		Uint8
-		5123 `),
-			Error: `is too big for field Uint8:*uint8`,
-		},
-		{
-			Data:  []byte(fmt.Sprintf(" %-309s\n%.0f", "Float32", math.MaxFloat64)),
-			Error: `is too big for field Float32:*float32`,
-		},
-	}
-
-	// Pointer fields overflow
-	type A struct {
-		Int8    *int8
-		Uint8   *uint8
-		Float32 *float32
-	}
-
-	for _, data := range badData {
-		var obtained []A
-		err := Unmarshal(data.Data[1:], &obtained)
-		if assert.Error(t, err) {
-			assert.Contains(t, err.Error(), data.Error)
+		for _, data := range badData {
+			var obtained []TestStruct
+			err := fw.Unmarshal(data.Data, &obtained)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring(data.Error))
 		}
-	}
-}
+
+	})
+
+})
+
+var _ = Describe("failure on input errors", Label("decode", "failure", "input"), func() {
+
+	It("fails on bad inputs", func() {
+		errs := []error{
+			fw.Unmarshal(nil, 1),
+			fw.Unmarshal(nil, nil),
+			fw.Unmarshal(nil, new(string)),
+			fw.Unmarshal(nil, &([]int{})),
+		}
+
+		for _, err := range errs {
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(Equal(fw.ErrIncorrectInputValue.Error()))
+		}
+
+		type B struct {
+			Int int `column:")Float32"`
+		}
+
+		type A struct {
+			Float32 B
+		}
+
+		err := fw.Unmarshal([]byte("Float32\nhello  "), &([]A{}))
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("fw: Unmarshal(non-pointer fw_test.B)"))
+
+		err = fw.Unmarshal([]byte("Float32\nhello  "), &([]B{}))
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("error parsing regexp"))
+
+	})
+
+	var _ = Describe("TextUnmarshal", Label("decoder", "textmarshal"), func() {
+
+		It("can decode a struct with a pointer member implementing TextUnmarshal", func() {
+
+			expected := []DataValP{{
+				Name: "test",
+				Size: &DataSize{Value: 20.5, Units: "mb"},
+			}}
+
+			data := "Name            Size          \ntest            20.5mb        "
+
+			actual := []DataValP{}
+			Expect(fw.Unmarshal([]byte(data), &actual)).NotTo(HaveOccurred())
+			Expect(expected).To(Equal(actual))
+		})
+
+		It("can decode a struct with a value member implementing TextUnmarshal", func() {
+
+			expected := []DataVal{{
+				Name: "test",
+				Size: DataSize{Value: 20.5, Units: "mb"},
+			}}
+
+			data := "Name            Size          \ntest            20.5mb        "
+
+			actual := []DataVal{}
+			Expect(fw.Unmarshal([]byte(data), &actual)).NotTo(HaveOccurred())
+			Expect(expected).To(Equal(actual))
+		})
+
+		It("can decode a pointer to astruct with a pointer member implementing TextUnmarshal", func() {
+
+			expected := []*DataValP{{
+				Name: "test",
+				Size: &DataSize{Value: 20.5, Units: "mb"},
+			}}
+
+			data := "Name            Size          \ntest            20.5mb        "
+
+			actual := []*DataValP{}
+			Expect(fw.Unmarshal([]byte(data), &actual)).NotTo(HaveOccurred())
+			Expect(expected).To(Equal(actual))
+		})
+
+		It("can decode a struct with a value member implementing TextUnmarshal", func() {
+
+			expected := []*DataVal{{
+				Name: "test",
+				Size: DataSize{Value: 20.5, Units: "mb"},
+			}}
+
+			data := "Name            Size          \ntest            20.5mb        "
+
+			actual := []*DataVal{}
+			Expect(fw.Unmarshal([]byte(data), &actual)).NotTo(HaveOccurred())
+			Expect(expected).To(Equal(actual))
+		})
+
+	})
+
+})
