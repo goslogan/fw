@@ -69,6 +69,6 @@ func (d *DataSize) UnmarshalText(text []byte) error {
 func TestFw(t *testing.T) {
 	suiteConfig, reportConfig := GinkgoConfiguration()
 	RegisterFailHandler(Fail)
-	suiteConfig.LabelFilter = "textmarshal"
+	suiteConfig.LabelFilter = "struct"
 	RunSpecs(t, "Fw Suit", suiteConfig, reportConfig)
 }

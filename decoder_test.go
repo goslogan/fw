@@ -16,7 +16,45 @@ var byteData []byte
 
 var _ = Describe("Decoder", Label("decode"), func() {
 
-	It("unmarshal a single row of data into a struct", Label("struct"), func() {
+	It("can unmarshal a single row of data into a struct", Label("struct"), func() {
+		s := "Test Ptr String"
+		bb := false
+		i := int8(15)
+		ui := uint8(16)
+		f := float32(15.5)
+		d := time.Date(2017, 12, 28, 0, 0, 0, 0, time.UTC)
+
+		expected := TestStruct{
+			String:    "Test String",
+			Bool:      true,
+			Int:       -1,
+			Int8:      -2,
+			Int16:     -3,
+			Int32:     -4,
+			Int64:     -5,
+			Uint:      1,
+			Uint8:     2,
+			Uint16:    3,
+			Uint32:    4,
+			Uint64:    5,
+			Float32:   1.5,
+			Float64:   2.5,
+			Date:      time.Date(2017, 12, 27, 13, 48, 3, 0, time.UTC),
+			Birthday:  time.Date(2017, 12, 27, 0, 0, 0, 0, time.UTC),
+			PString:   &s,
+			PBool:     &bb,
+			PInt8:     &i,
+			PUint8:    &ui,
+			PFloat32:  &f,
+			PBirthday: &d,
+		}
+
+		var obtained = TestStruct{}
+		Expect(fw.Unmarshal(byteData, &obtained)).NotTo(HaveOccurred())
+		Expect(expected).To(Equal(obtained))
+	})
+
+	It("can unmarshal a single row of data into a slice of structs", Label("slice"), func() {
 		s := "Test Ptr String"
 		bb := false
 		i := int8(15)
@@ -54,7 +92,7 @@ var _ = Describe("Decoder", Label("decode"), func() {
 		Expect(expected).To(Equal(obtained))
 	})
 
-	It("can decode a single row of data into a pointer to a struct", Label("decode", "pointer"), func() {
+	It("can decode a single row of data into a slice of pointers to structs", Label("decode", "pointer"), func() {
 
 		s := "Test Ptr String"
 		bb := false

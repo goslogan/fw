@@ -39,6 +39,7 @@ type Decoder struct {
 	fieldSeparator     string
 	done               bool
 	headersParsed      bool
+	skipHeaders        bool
 	settersInitialised bool
 	cols               []*FWColumn
 	headersLength      int
@@ -58,9 +59,14 @@ func NewDecoder(r io.Reader) *Decoder {
 	return dec
 }
 
-// Unmarshal simply wraps NewDecoder using only the defaults
+// Unmarshal decodes a buffer into the array pointed to by v
 func Unmarshal(buf []byte, v interface{}) error {
 	return NewDecoder(bytes.NewReader(buf)).Decode(v)
+}
+
+// UnmarshalReader decodes a reader into the array pointed to by v
+func UnmarshalReader(r io.Reader, v interface{}) error {
+	return NewDecoder(r).Decode(v)
 }
 
 func (d *Decoder) scan(data []byte, atEOF bool) (advance int, token []byte, err error) {
@@ -91,54 +97,97 @@ var textUnmarshalerType = reflect.TypeOf(new(encoding.TextUnmarshaler)).Elem()
 // is returned if a line is encountered that too long to decode.
 func (d *Decoder) Decode(v interface{}) error {
 
+	var (
+		err error
+		ok  bool
+	)
+
 	if d.done {
 		return fmt.Errorf("processing already complete")
 	}
 
 	rv := reflect.ValueOf(v)
 
-	var (
-		err   error
-		slice *reflect.Value
-	)
-
-	slice, err = getSlice(reflect.ValueOf(v))
-	if err != nil {
-		return err
+	if rv.Kind() != reflect.Ptr || rv.IsNil() {
+		return ErrIncorrectInputValue
 	}
 
-	d.structType, d.isPointer, err = getStructType(rv)
-	if err != nil {
-		return err
+	if rv.Kind() == reflect.Ptr {
+		rv = rv.Elem()
 	}
 
-	err, ok := d.readLines(*slice)
+	if rv.Kind() == reflect.Slice {
+
+		if err := d.initialiseDecoder(rv); err != nil {
+			return err
+		}
+
+		err, ok = d.readLines(rv)
+
+	} else {
+
+		if rv.Kind() != reflect.Struct {
+			return ErrIncorrectInputValue
+		}
+
+		if err := d.initialiseDecoder(rv); err != nil {
+			return err
+		}
+
+		err, ok = d.readLine(rv)
+
+	}
+
 	if d.done && err == nil && !ok {
 		// d.done means we've reached the end of the file. err == nil && !ok
 		// indicates that there was no data to read, so we propagate an io.EOF
 		// upwards so our caller knows there is no data left.
 		return io.EOF
 	}
+
 	return err
 }
 
-// At this point we *know* that v is a pointer to a slice.
-func (d *Decoder) readLines(slice reflect.Value) (error, bool) {
+// Initialise setters and headers if required
+func (d *Decoder) initialiseDecoder(v reflect.Value) error {
+
+	d.structType = v.Type()
+
+	if v.Kind() == reflect.Slice {
+		d.structType = v.Type().Elem()
+		if d.structType.Kind() == reflect.Pointer {
+			d.isPointer = true
+			d.structType = d.structType.Elem()
+		}
+		if d.structType.Kind() != reflect.Struct {
+			return ErrIncorrectInputValue
+		}
+
+		if d.structType.Kind() != reflect.Struct {
+			return ErrIncorrectInputValue
+		}
+	}
 
 	if !d.headersParsed {
 		colNames := d.getColNames()
 		if err := d.parseHeaders(colNames); err != nil {
-			return err, false
+			return err
 		}
 		d.headersParsed = true
 	}
 
 	if !d.settersInitialised {
 		if err := d.constructSetters(); err != nil {
-			return err, false
+			return err
 		}
 		d.settersInitialised = true
 	}
+
+	return nil
+}
+
+// At this point we *know* that v is a pointer to a slice.
+func (d *Decoder) readLines(slice reflect.Value) (error, bool) {
 
 	for {
 		nv := reflect.New(d.structType).Elem()
@@ -196,6 +245,10 @@ func (d *Decoder) readLine(item reflect.Value) (error, bool) {
 
 func (d *Decoder) parseHeaders(columnNames []string) error {
 
+	if d.headersParsed {
+		return nil
+	}
+
 	ok := d.scanner.Scan()
 	if !ok {
 		if d.scanner.Err() != nil {
@@ -205,8 +258,11 @@ func (d *Decoder) parseHeaders(columnNames []string) error {
 		d.done = true
 		return nil
 	}
-
 	d.lineNum++
+
+	if d.skipHeaders {
+		return nil
+	}
 
 	line := d.scanner.Text()
 	d.headersLength = len([]rune(line))
@@ -307,77 +363,24 @@ func (d *Decoder) SetFieldSeparator(fieldSeparator string) {
 	}
 }
 
+// SetSkipHeaders can be used to set whether or not the first line is ignored
+// By default, it is not skipped. If SetColumns is called, headers will be skipped.
+// It may then be desirable to reset it. If SetColumns has been called, the headers
+// will be read and discarded if SetSkipHeaders(true) is called.
+func (d *Decoder) SetSkipHeaders(skip bool) {
+	d.skipHeaders = skip
+}
+
 // SetColumns sets up the column names and widths to be used when parsing lines
 // rather than extracting them from the first line of text.
 
 func (d *Decoder) SetColumns(cols []*FWColumn) {
 	if len(cols) > 0 {
 		d.headersParsed = true
+		d.skipHeaders = true
 		d.settersInitialised = false
 		d.cols = cols
 	}
-}
-
-func getSlice(v reflect.Value) (*reflect.Value, error) {
-
-	if v.Kind() != reflect.Ptr || v.IsNil() {
-		return nil, ErrIncorrectInputValue
-	}
-
-	if v.Elem().Kind() != reflect.Slice {
-		return nil, ErrIncorrectInputValue
-	}
-
-	if v.Elem().Kind() != reflect.Slice {
-		return nil, ErrIncorrectInputValue
-	}
-
-	slice := v.Elem()
-
-	return &slice, nil
-}
-
-func getSliceType(v reflect.Value) (reflect.Type, error) {
-
-	if slice, err := getSlice(v); err != nil {
-		return nil, err
-	} else {
-		return slice.Type(), nil
-	}
-}
-
-func getStructType(v reflect.Value) (reflect.Type, bool, error) {
-
-	isPointer := false
-	sliceType, err := getSliceType(v)
-	if err != nil {
-		return nil, false, err
-	}
-
-	if v.Kind() != reflect.Ptr || v.IsNil() {
-		return nil, false, ErrIncorrectInputValue
-	}
-
-	if v.Elem().Kind() != reflect.Slice {
-		return nil, false, ErrIncorrectInputValue
-	}
-
-	if v.Elem().Kind() != reflect.Slice {
-		return nil, false, ErrIncorrectInputValue
-	}
-
-	structType := sliceType.Elem()
-	if structType.Kind() == reflect.Pointer {
-		isPointer = true
-		structType = structType.Elem()
-	}
-
-	if structType.Kind() != reflect.Struct {
-		return nil, false, ErrIncorrectInputValue
-	}
-
-	return structType, isPointer, nil
-
 }
 
 func fieldSetter(col *FWColumn, field reflect.StructField) error {
@@ -388,15 +391,6 @@ func fieldSetter(col *FWColumn, field reflect.StructField) error {
 	isPointer := fieldKind == reflect.Ptr
 	if isPointer {
 		fieldKind = field.Type.Elem().Kind()
-	}
-
-	if field.Type.Implements(textUnmarshalerType) {
-		col.setter = textUnmarshalerSet
-		return nil
-
-	} else if reflect.PointerTo(field.Type).Implements(textUnmarshalerType) {
-		col.setter = textUnmarshalerSetPointer
-		return nil
 	}
 
 	switch fieldKind {
@@ -437,11 +431,17 @@ func fieldSetter(col *FWColumn, field reflect.StructField) error {
 			} else {
 				col.setter = timeSet
 			}
+			return nil
+		}
+		fallthrough
+	default:
+		if field.Type.Implements(textUnmarshalerType) {
+			col.setter = textUnmarshalerSet
+		} else if reflect.PointerTo(field.Type).Implements(textUnmarshalerType) {
+			col.setter = textUnmarshalerSetPointer
 		} else {
 			return &InvalidUnmarshalError{Type: field.Type}
 		}
-	default:
-		return &InvalidUnmarshalError{Type: field.Type}
 	}
 
 	return nil

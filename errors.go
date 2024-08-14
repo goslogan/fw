@@ -23,4 +23,4 @@ func (e *InvalidUnmarshalError) Error() string {
 }
 
 // ErrIncorrectInputValue represents wrong input param
-var ErrIncorrectInputValue = errors.New("value is not a pointer to slice of structs")
+var ErrIncorrectInputValue = errors.New("value is not a pointer to slice of structs or a pointer to a struct")
