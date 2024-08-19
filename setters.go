@@ -2,6 +2,7 @@ package fw
 
 import (
 	"encoding"
+	"fmt"
 	"reflect"
 	"regexp"
 	"strconv"
@@ -248,16 +249,6 @@ func textUnmarshalerSetPointer(field reflect.Value, structField reflect.StructFi
 	return field.Interface().(encoding.TextUnmarshaler).UnmarshalText([]byte(rawValue))
 }
 
-var structSetterCache sync.Map // map[reflect.Type]structSetter
-
-func cachedStructSetter(t reflect.Type, indices map[string][]int, fieldSeparator string) structSetter {
-	if f, ok := structSetterCache.Load(t); ok {
-		return f.(structSetter)
-	}
-	f, _ := structSetterCache.LoadOrStore(t, createStructSetter(t, indices, fieldSeparator))
-	return f.(structSetter)
-}
-
 func createStructSetter(st reflect.Type, indices map[string][]int, fieldSeparator string) structSetter {
 
 	nFields := st.NumField()
@@ -303,4 +294,15 @@ func getRefName(field reflect.StructField) string {
 	}
 
 	return field.Name
+}
+
+var structSetterCache sync.Map // map[string]structSetter
+
+func cachedStructSetter(t reflect.Type, indices map[string][]int, fieldSeparator string) structSetter {
+	key := fmt.Sprintf("%s.%s:%v:%s", t.PkgPath(), t.Name(), indices, fieldSeparator)
+	if f, ok := structSetterCache.Load(key); ok {
+		return f.(structSetter)
+	}
+	f, _ := structSetterCache.LoadOrStore(key, createStructSetter(t, indices, fieldSeparator))
+	return f.(structSetter)
 }
