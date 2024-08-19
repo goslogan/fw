@@ -2,6 +2,7 @@ package fw
 
 import (
 	"errors"
+	"fmt"
 	"reflect"
 )
 
@@ -24,3 +25,11 @@ func (e *InvalidUnmarshalError) Error() string {
 
 // ErrIncorrectInputValue represents wrong input param
 var ErrIncorrectInputValue = errors.New("value is not a pointer to slice of structs or a pointer to a struct")
+
+func newCastingError(err error, rawValue string, structField reflect.StructField) error {
+	return fmt.Errorf(`failed casting "%s" to "%s:%v": %w`, rawValue, structField.Name, structField.Type, err)
+}
+
+func newOverflowError(value any, structField reflect.StructField) error {
+	return fmt.Errorf(`value %v is too big for field %s:%v`, value, structField.Name, structField.Type)
+}
