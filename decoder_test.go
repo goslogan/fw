@@ -1,6 +1,7 @@
 package fw_test
 
 import (
+	"bytes"
 	_ "embed"
 	"fmt"
 	"math"
@@ -13,6 +14,9 @@ import (
 
 //go:embed "testdata/correct_all_supported.txt"
 var byteData []byte
+
+//go:embed "testdata/multi-line.txt"
+var multiData []byte
 
 var _ = Describe("Decoder", Label("decode"), func() {
 
@@ -194,95 +198,130 @@ var _ = Describe("decode fail", Label("decode", "failure", "conversion"), func()
 
 var _ = Describe("failure on input errors", Label("decode", "failure", "input"), func() {
 
+	type B struct {
+		Int int `column:"Float32"`
+	}
+
+	type A struct {
+		Float32 B
+	}
+
 	It("fails on bad inputs", func() {
-		errs := []error{
-			fw.Unmarshal(nil, 1),
-			fw.Unmarshal(nil, nil),
-			fw.Unmarshal(nil, new(string)),
-			fw.Unmarshal(nil, &([]int{})),
-		}
 
-		for _, err := range errs {
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(Equal(fw.ErrIncorrectInputValue.Error()))
-		}
-
-		type B struct {
-			Int int `column:")Float32"`
-		}
-
-		type A struct {
-			Float32 B
-		}
-
-		err := fw.Unmarshal([]byte("Float32\nhello  "), &([]A{}))
+		err := fw.Unmarshal(nil, 1)
 		Expect(err).To(HaveOccurred())
-		Expect(err.Error()).To(ContainSubstring("fw: Unmarshal(non-pointer fw_test.B)"))
+		Expect(err.Error()).To(Equal(fw.ErrIncorrectInputValue.Error()))
 
-		err = fw.Unmarshal([]byte("Float32\nhello  "), &([]B{}))
+		err = fw.Unmarshal(nil, nil)
 		Expect(err).To(HaveOccurred())
-		Expect(err.Error()).To(ContainSubstring("error parsing regexp"))
+		Expect(err.Error()).To(Equal(fw.ErrIncorrectInputValue.Error()))
+
+		err = fw.Unmarshal(nil, new(string))
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(Equal(fw.ErrIncorrectInputValue.Error()))
+
+		err = fw.Unmarshal(nil, &([]int{}))
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(Equal(fw.ErrIncorrectInputValue.Error()))
+
+		err = fw.Unmarshal([]byte("Float32\nhello  "), &([]A{}))
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring(`unable to create a converter for field "Float32" for type "fw_test.B"`))
 
 	})
 
-	var _ = Describe("TextUnmarshal", Label("decoder", "textmarshal"), func() {
+})
 
-		It("can decode a struct with a pointer member implementing TextUnmarshal", func() {
+var _ = Describe("TextUnmarshal", Label("decoder", "textmarshal"), func() {
 
-			expected := []DataValP{{
-				Name: "test",
-				Size: &DataSize{Value: 20.5, Units: "mb"},
-			}}
+	It("can decode a struct with a pointer member implementing TextUnmarshal", func() {
 
-			data := "Name            Size          \ntest            20.5mb        "
+		expected := []DataValP{{
+			Name: "test",
+			Size: &DataSize{Value: 20.5, Units: "mb"},
+		}}
 
-			actual := []DataValP{}
-			Expect(fw.Unmarshal([]byte(data), &actual)).NotTo(HaveOccurred())
-			Expect(expected).To(Equal(actual))
-		})
+		data := "Name            Size          \ntest            20.5mb        "
 
-		It("can decode a struct with a value member implementing TextUnmarshal", func() {
-
-			expected := []DataVal{{
-				Name: "test",
-				Size: DataSize{Value: 20.5, Units: "mb"},
-			}}
-
-			data := "Name            Size          \ntest            20.5mb        "
-
-			actual := []DataVal{}
-			Expect(fw.Unmarshal([]byte(data), &actual)).NotTo(HaveOccurred())
-			Expect(expected).To(Equal(actual))
-		})
-
-		It("can decode a pointer to astruct with a pointer member implementing TextUnmarshal", func() {
-
-			expected := []*DataValP{{
-				Name: "test",
-				Size: &DataSize{Value: 20.5, Units: "mb"},
-			}}
-
-			data := "Name            Size          \ntest            20.5mb        "
-
-			actual := []*DataValP{}
-			Expect(fw.Unmarshal([]byte(data), &actual)).NotTo(HaveOccurred())
-			Expect(expected).To(Equal(actual))
-		})
-
-		It("can decode a struct with a value member implementing TextUnmarshal", func() {
-
-			expected := []*DataVal{{
-				Name: "test",
-				Size: DataSize{Value: 20.5, Units: "mb"},
-			}}
-
-			data := "Name            Size          \ntest            20.5mb        "
-
-			actual := []*DataVal{}
-			Expect(fw.Unmarshal([]byte(data), &actual)).NotTo(HaveOccurred())
-			Expect(expected).To(Equal(actual))
-		})
-
+		actual := []DataValP{}
+		Expect(fw.Unmarshal([]byte(data), &actual)).NotTo(HaveOccurred())
+		Expect(expected).To(Equal(actual))
 	})
 
+	It("can decode a struct with a value member implementing TextUnmarshal", func() {
+
+		expected := []DataVal{{
+			Name: "test",
+			Size: DataSize{Value: 20.5, Units: "mb"},
+		}}
+
+		data := "Name            Size          \ntest            20.5mb        "
+
+		actual := []DataVal{}
+		Expect(fw.Unmarshal([]byte(data), &actual)).NotTo(HaveOccurred())
+		Expect(expected).To(Equal(actual))
+	})
+
+	It("can decode a pointer to astruct with a pointer member implementing TextUnmarshal", func() {
+
+		expected := []*DataValP{{
+			Name: "test",
+			Size: &DataSize{Value: 20.5, Units: "mb"},
+		}}
+
+		data := "Name            Size          \ntest            20.5mb        "
+
+		actual := []*DataValP{}
+		Expect(fw.Unmarshal([]byte(data), &actual)).NotTo(HaveOccurred())
+		Expect(expected).To(Equal(actual))
+	})
+
+	It("can decode a struct with a value member implementing TextUnmarshal", func() {
+
+		expected := []*DataVal{{
+			Name: "test",
+			Size: DataSize{Value: 20.5, Units: "mb"},
+		}}
+
+		data := "Name            Size          \ntest            20.5mb        "
+
+		actual := []*DataVal{}
+		Expect(fw.Unmarshal([]byte(data), &actual)).NotTo(HaveOccurred())
+		Expect(expected).To(Equal(actual))
+	})
+
+})
+
+var _ = Describe("multiple structs", func() {
+
+	type A struct {
+		Alpha  string
+		Number float32
+		When   time.Time `column:"Date" format:"2006-01-02"`
+	}
+
+	type B struct {
+		Beta   string
+		Number float32
+		When   time.Time `column:"Date" format:"2006-01-01"`
+	}
+
+	It("can reading multiple lines into different structs", func() {
+		a := A{}
+		b := B{}
+
+		expectedA := A{Alpha: "𝜶", Number: 0.9, When: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)}
+		expectedB := B{Beta: "β", Number: -1.4, When: time.Date(2024, 9, 1, 0, 0, 0, 0, time.UTC)}
+
+		decoder := fw.NewDecoder(bytes.NewReader(multiData))
+
+		err := decoder.Decode(&a)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(a).To(Equal(expectedA))
+
+		err = decoder.Decode(&b)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(b).To(Equal(expectedB))
+
+	})
 })

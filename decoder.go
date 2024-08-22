@@ -21,6 +21,7 @@ type Decoder struct {
 	fieldSeparator string
 	done           bool
 	headersParsed  bool
+	headersLength  int
 	skipHeaders    bool
 	lineNum        int
 	headers        map[string][]int
@@ -94,6 +95,14 @@ func (d *Decoder) Decode(v interface{}) error {
 	}
 
 	if rv.Kind() == reflect.Slice {
+
+		structType := rv.Type().Elem()
+		if structType.Kind() == reflect.Pointer {
+			structType = structType.Elem()
+		}
+		if structType.Kind() != reflect.Struct {
+			return ErrIncorrectInputValue
+		}
 
 		if err := d.initialiseDecoder(); err != nil {
 			return err
@@ -180,11 +189,20 @@ func (d *Decoder) readLine(item reflect.Value) (error, bool) {
 
 	d.lineNum++
 	line := d.scanner.Text()
+	lineLen := len([]rune(line))
 	t := item.Type()
 
+	if lineLen != d.headersLength {
+		return fmt.Errorf("wrong data length in line %d (%d != %d)", d.lineNum, lineLen, d.headersLength), false
+	}
+
 	if t != d.lastType {
+		var err error
 		d.lastType = t
-		d.lastSetter = cachedStructSetter(t, d.headers, d.fieldSeparator)
+		d.lastSetter, err = cachedStructSetter(t, d.headers, d.fieldSeparator)
+		if err != nil {
+			return err, false
+		}
 	}
 
 	return d.lastSetter(item, line), true
@@ -220,6 +238,7 @@ func (d *Decoder) parseHeaders() error {
 	}
 
 	line := d.scanner.Text()
+	d.headersLength = len([]rune(line))
 
 	indices := headerRegexp.FindAllStringIndex(line, -1)
 	d.headers = make(map[string][]int)

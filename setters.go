@@ -18,7 +18,7 @@ type structSetter func(item reflect.Value, line string) error
 var textUnmarshalerType = reflect.TypeOf(new(encoding.TextUnmarshaler)).Elem()
 
 // getFieldSetter returns a setter if one can be found and nil if not
-func getFieldSetter(field reflect.StructField) valueSetter {
+func getFieldSetter(field reflect.StructField) (valueSetter, error) {
 
 	var setter valueSetter
 
@@ -66,7 +66,7 @@ func getFieldSetter(field reflect.StructField) valueSetter {
 			} else {
 				setter = createTimeSet(field)
 			}
-			return setter
+			return setter, nil
 		}
 		fallthrough
 	default:
@@ -74,10 +74,12 @@ func getFieldSetter(field reflect.StructField) valueSetter {
 			setter = textUnmarshalerSet
 		} else if reflect.PointerTo(field.Type).Implements(textUnmarshalerType) {
 			setter = textUnmarshalerSetPointer
+		} else {
+			return nil, newInvalidTypeError(field)
 		}
 	}
 
-	return setter
+	return setter, nil
 }
 
 func createTimeSet(structField reflect.StructField) valueSetter {
@@ -249,7 +251,7 @@ func textUnmarshalerSetPointer(field reflect.Value, structField reflect.StructFi
 	return field.Interface().(encoding.TextUnmarshaler).UnmarshalText([]byte(rawValue))
 }
 
-func createStructSetter(st reflect.Type, indices map[string][]int, fieldSeparator string) structSetter {
+func createStructSetter(st reflect.Type, indices map[string][]int, fieldSeparator string) (structSetter, error) {
 
 	nFields := st.NumField()
 	valueSetters := make([]func(reflect.Value, string) error, 0)
@@ -261,7 +263,10 @@ func createStructSetter(st reflect.Type, indices map[string][]int, fieldSeparato
 		if currentField.IsExported() {
 			tagName := getRefName(currentField)
 			if index, ok := indices[tagName]; ok {
-				setter := getFieldSetter(currentField)
+				setter, err := getFieldSetter(currentField)
+				if err != nil {
+					return nil, err
+				}
 				idx := fieldIndex
 				if setter != nil {
 					valueSetters = append(valueSetters, func(v reflect.Value, rawValue string) error {
@@ -284,7 +289,7 @@ func createStructSetter(st reflect.Type, indices map[string][]int, fieldSeparato
 			}
 		}
 		return nil
-	}
+	}, nil
 
 }
 
@@ -298,11 +303,15 @@ func getRefName(field reflect.StructField) string {
 
 var structSetterCache sync.Map // map[string]structSetter
 
-func cachedStructSetter(t reflect.Type, indices map[string][]int, fieldSeparator string) structSetter {
+func cachedStructSetter(t reflect.Type, indices map[string][]int, fieldSeparator string) (structSetter, error) {
 	key := fmt.Sprintf("%s.%s:%v:%s", t.PkgPath(), t.Name(), indices, fieldSeparator)
 	if f, ok := structSetterCache.Load(key); ok {
-		return f.(structSetter)
+		return f.(structSetter), nil
 	}
-	f, _ := structSetterCache.LoadOrStore(key, createStructSetter(t, indices, fieldSeparator))
-	return f.(structSetter)
+	setter, err := createStructSetter(t, indices, fieldSeparator)
+	if err != nil {
+		return nil, err
+	}
+	f, _ := structSetterCache.LoadOrStore(key, setter)
+	return f.(structSetter), nil
 }

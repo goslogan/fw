@@ -18,3 +18,4 @@ Gopkg.lock
 
 # Notes
 notes.md
+.DS_Store

@@ -26,6 +26,11 @@ func (e *InvalidUnmarshalError) Error() string {
 // ErrIncorrectInputValue represents wrong input param
 var ErrIncorrectInputValue = errors.New("value is not a pointer to slice of structs or a pointer to a struct")
 
+// newInvalidTypeError represents a type we convert.
+func newInvalidTypeError(structField reflect.StructField) error {
+	return fmt.Errorf(`unable to create a converter for field "%s" for type "%v"`, structField.Name, structField.Type)
+}
+
 func newCastingError(err error, rawValue string, structField reflect.StructField) error {
 	return fmt.Errorf(`failed casting "%s" to "%s:%v": %w`, rawValue, structField.Name, structField.Type, err)
 }
