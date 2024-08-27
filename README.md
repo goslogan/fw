@@ -31,7 +31,7 @@ To install the library use the following command:
 $ go get -u github.com/goslogan/fw
 ```
 
-## Decoding example
+## Simple example
 
 Parsing data from io.Reader:
 
@@ -51,8 +51,4 @@ defer f.Close
 var people []Person
 err := fw.Unmarshal(input, &people)
 ```
-You can customise the decoder by initialising it separately:
 
-```go
-input, _ := ioutil.ReadFile("/path/to/file")
-decoder := fw.NewDecoder(input)
