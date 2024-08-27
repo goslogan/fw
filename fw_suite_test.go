@@ -52,13 +52,13 @@ type DataVal struct {
 	Size DataSize
 }
 
-func (d *DataSize) UnmarshalText(text []byte) error {
+func (datasize *DataSize) UnmarshalText(text []byte) error {
 	var err error
 	re := regexp.MustCompile(`(?i)(\d+(?:\.\d+))\s*(mi?b|gi?b|ti?b|ki?b|pi?b|zi?b)`)
 	result := re.FindStringSubmatch(string(text))
 	if len(result) == 3 {
-		d.Units = result[2]
-		d.Value, err = strconv.ParseFloat(result[1], 64)
+		datasize.Units = result[2]
+		datasize.Value, err = strconv.ParseFloat(result[1], 64)
 	} else {
 		return fmt.Errorf("fw: can't parse %s as datasize", string(text))
 	}
@@ -69,6 +69,6 @@ func (d *DataSize) UnmarshalText(text []byte) error {
 func TestFw(t *testing.T) {
 	suiteConfig, reportConfig := GinkgoConfiguration()
 	RegisterFailHandler(Fail)
-	//suiteConfig.LabelFilter = "failure"
+	// suiteConfig.LabelFilter = "record-end"
 	RunSpecs(t, "Fw Suit", suiteConfig, reportConfig)
 }

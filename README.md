@@ -2,13 +2,15 @@
 [![License](http://img.shields.io/:license-mit-blue.svg)](LICENSE)
 
 
-Updated library derived from [Oleg Lobanov's fwencoder](https://github.com/o1egl/fwencoder).
+Updated library derived from [Oleg Lobanov's fwencoder](https://github.com/o1egl/fwencoder) with some aspects of [Ian Lopshire's go-fixedwidth](github.com/ianlopshire/go-fixedwidth)
 
 Ths version currently only decodes but has a few additional features.
 
 1. It supports the TextMarshaler/TextUnmarshaler interface
 2. It allows multiple calls to the decoder by allowing a pointer to a struct to be passed to it as well as a slice.
 3. It's slightly faster because it caches conversion functions
+4. It supports arbitrary record endings and field conversions 
+5. It allows the headers to be predefined by the caller 
 
 * It **does not** support JSON decoding for complex data structures.
 * **Encoding** is also unsupported. 
@@ -43,17 +45,14 @@ type Person struct {
 	Bday        time.Time `column:"Birthday" format:"20060102"`
 }
 
-f, _ := os.Open("/path/to/file")
+input, _ := os.ReadFile("/path/to/file")
 defer f.Close
 
 var people []Person
-err := fwencoder.UnmarshalReader(f, &people)
+err := fw.Unmarshal(input, &people)
 ```
-
-You can also parse data from byte array:
+You can customise the decoder by initialising it separately:
 
 ```go
-b, _ := ioutil.ReadFile("/path/to/file")
-var people []Person
-err := fwencoder.Unmarshal(b, &people)
-```
+input, _ := ioutil.ReadFile("/path/to/file")
+decoder := fw.NewDecoder(input)

@@ -267,21 +267,18 @@ func createStructSetter(st reflect.Type, indices map[string][]int, fieldSeparato
 				if err != nil {
 					return nil, err
 				}
-				idx := fieldIndex
 				if setter != nil {
-					valueSetters = append(valueSetters, func(v reflect.Value, rawValue string) error {
-						fieldVal := v.Field(idx)
-						lineRunes := []rune(rawValue)
-						fieldRunes := lineRunes[index[0]:index[1]]
-						rawField := leftTrimmer.ReplaceAllString(string(fieldRunes), "")
-						rawField = rightTrimmer.ReplaceAllString(rawField, "")
-						return setter(fieldVal, currentField, rawField)
-					})
+					valueSetters = append(valueSetters, valueSetterFunc(currentField, fieldIndex, index[0], index[1], leftTrimmer, rightTrimmer, setter))
 				}
 			}
 		}
 	}
 
+	return structSetterFunc(valueSetters), nil
+
+}
+
+func structSetterFunc(valueSetters []func(reflect.Value, string) error) func(item reflect.Value, line string) error {
 	return func(item reflect.Value, line string) error {
 		for _, setter := range valueSetters {
 			if err := setter(item, line); err != nil {
@@ -289,8 +286,18 @@ func createStructSetter(st reflect.Type, indices map[string][]int, fieldSeparato
 			}
 		}
 		return nil
-	}, nil
+	}
+}
 
+func valueSetterFunc(currentField reflect.StructField, idx, from, to int, leftTrimmer, rightTrimmer *regexp.Regexp, setter valueSetter) func(reflect.Value, string) error {
+	return func(v reflect.Value, rawValue string) error {
+		fieldVal := v.Field(idx)
+		lineRunes := []rune(rawValue)
+		fieldRunes := lineRunes[from:to]
+		rawField := leftTrimmer.ReplaceAllString(string(fieldRunes), "")
+		rawField = rightTrimmer.ReplaceAllString(rawField, "")
+		return setter(fieldVal, currentField, rawField)
+	}
 }
 
 func getRefName(field reflect.StructField) string {

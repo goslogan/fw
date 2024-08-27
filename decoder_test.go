@@ -18,15 +18,21 @@ var byteData []byte
 //go:embed "testdata/multi-line.txt"
 var multiData []byte
 
+//go:embed "testdata/multi-line-headless.txt"
+var multiDataHeadless []byte
+
+//go:embed "testdata/different-record-end.txt"
+var differentRecord []byte
+
 var _ = Describe("Decoder", Label("decode"), func() {
 
 	It("can unmarshal a single row of data into a struct", Label("struct"), func() {
-		s := "Test Ptr String"
-		bb := false
-		i := int8(15)
-		ui := uint8(16)
-		f := float32(15.5)
-		d := time.Date(2017, 12, 28, 0, 0, 0, 0, time.UTC)
+		strVal := "Test Ptr String"
+		boolVal := false
+		intVal := int8(15)
+		uintVal := uint8(16)
+		floatVal := float32(15.5)
+		dateVal := time.Date(2017, 12, 28, 0, 0, 0, 0, time.UTC)
 
 		expected := TestStruct{
 			String:    "Test String",
@@ -45,12 +51,12 @@ var _ = Describe("Decoder", Label("decode"), func() {
 			Float64:   2.5,
 			Date:      time.Date(2017, 12, 27, 13, 48, 3, 0, time.UTC),
 			Birthday:  time.Date(2017, 12, 27, 0, 0, 0, 0, time.UTC),
-			PString:   &s,
-			PBool:     &bb,
-			PInt8:     &i,
-			PUint8:    &ui,
-			PFloat32:  &f,
-			PBirthday: &d,
+			PString:   &strVal,
+			PBool:     &boolVal,
+			PInt8:     &intVal,
+			PUint8:    &uintVal,
+			PFloat32:  &floatVal,
+			PBirthday: &dateVal,
 		}
 
 		var obtained = TestStruct{}
@@ -59,12 +65,12 @@ var _ = Describe("Decoder", Label("decode"), func() {
 	})
 
 	It("can unmarshal a single row of data into a slice of structs", Label("slice"), func() {
-		s := "Test Ptr String"
-		bb := false
-		i := int8(15)
-		ui := uint8(16)
-		f := float32(15.5)
-		d := time.Date(2017, 12, 28, 0, 0, 0, 0, time.UTC)
+		strVal := "Test Ptr String"
+		boolVal := false
+		intVal := int8(15)
+		uintVal := uint8(16)
+		floatVal := float32(15.5)
+		dateVal := time.Date(2017, 12, 28, 0, 0, 0, 0, time.UTC)
 
 		expected := []TestStruct{{
 			String:    "Test String",
@@ -83,12 +89,12 @@ var _ = Describe("Decoder", Label("decode"), func() {
 			Float64:   2.5,
 			Date:      time.Date(2017, 12, 27, 13, 48, 3, 0, time.UTC),
 			Birthday:  time.Date(2017, 12, 27, 0, 0, 0, 0, time.UTC),
-			PString:   &s,
-			PBool:     &bb,
-			PInt8:     &i,
-			PUint8:    &ui,
-			PFloat32:  &f,
-			PBirthday: &d,
+			PString:   &strVal,
+			PBool:     &boolVal,
+			PInt8:     &intVal,
+			PUint8:    &uintVal,
+			PFloat32:  &floatVal,
+			PBirthday: &dateVal,
 		}}
 
 		var obtained []TestStruct
@@ -98,12 +104,12 @@ var _ = Describe("Decoder", Label("decode"), func() {
 
 	It("can decode a single row of data into a slice of pointers to structs", Label("decode", "pointer"), func() {
 
-		s := "Test Ptr String"
-		bb := false
-		i := int8(15)
-		ui := uint8(16)
-		f := float32(15.5)
-		d := time.Date(2017, 12, 28, 0, 0, 0, 0, time.UTC)
+		strVal := "Test Ptr String"
+		boolVal := false
+		intVal := int8(15)
+		uintVal := uint8(16)
+		floatVal := float32(15.5)
+		dateVal := time.Date(2017, 12, 28, 0, 0, 0, 0, time.UTC)
 
 		expected := []*TestStruct{{
 			String:    "Test String",
@@ -122,12 +128,12 @@ var _ = Describe("Decoder", Label("decode"), func() {
 			Float64:   2.5,
 			Date:      time.Date(2017, 12, 27, 13, 48, 3, 0, time.UTC),
 			Birthday:  time.Date(2017, 12, 27, 0, 0, 0, 0, time.UTC),
-			PString:   &s,
-			PBool:     &bb,
-			PInt8:     &i,
-			PUint8:    &ui,
-			PFloat32:  &f,
-			PBirthday: &d,
+			PString:   &strVal,
+			PBool:     &boolVal,
+			PInt8:     &intVal,
+			PUint8:    &uintVal,
+			PFloat32:  &floatVal,
+			PBirthday: &dateVal,
 		}}
 
 		var obtained []*TestStruct
@@ -323,5 +329,73 @@ var _ = Describe("multiple structs", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(b).To(Equal(expectedB))
 
+	})
+
+	var _ = Describe("explicit headers with header in data", Label("explicit"), func() {
+
+		type A struct {
+			Alpha  string
+			Number float32
+			When   time.Time `column:"Date" format:"2006-01-02"`
+		}
+
+		headers := map[string][]int{
+			"Alpha":  {0, 7},
+			"Beta":   {7, 13},
+			"Number": {13, 26},
+			"Date":   {26, 36},
+		}
+
+		It("can accept explicit headers and skip the first line", Label("noskip"), func() {
+
+			a := A{}
+			expectedA := A{Alpha: "𝜶", Number: 0.9, When: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)}
+
+			decoder := fw.NewDecoder(bytes.NewReader(multiData))
+			decoder.SetHeaders(headers)
+			decoder.SkipFirstRecord = true // we need to ignore the headers line
+
+			err := decoder.Decode(&a)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(a).To(Equal(expectedA))
+		})
+
+		It("can accept explicit headers and skip the first line", Label("skip"), func() {
+
+			a := A{}
+			expectedA := A{Alpha: "𝜶", Number: 0.9, When: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)}
+
+			decoder := fw.NewDecoder(bytes.NewReader(multiDataHeadless))
+			decoder.SetHeaders(headers)
+
+			err := decoder.Decode(&a)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(a).To(Equal(expectedA))
+		})
+	})
+
+	var _ = Describe("it can process files with different end of record markers", Label("record-end"), func() {
+
+		type C struct {
+			Alpha  string
+			Beta   string
+			Number float32
+			When   time.Time `column:"Date" format:"2006-01-02"`
+		}
+
+		It("can load a file with a pipe EOR marker", func() {
+			expected := []C{
+				{Alpha: "𝜶", Beta: "Β", Number: 0.9, When: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)},
+				{Alpha: "Α", Beta: "β", Number: -1.4, When: time.Date(2024, 1, 9, 0, 0, 0, 0, time.UTC)},
+			}
+			obtained := []C{}
+			decoder := fw.NewDecoder(bytes.NewReader(differentRecord))
+			decoder.RecordTerminator = []byte{'|'}
+			err := decoder.Decode(&obtained)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(obtained).To(HaveLen(2))
+			Expect(obtained).To(Equal(expected))
+
+		})
 	})
 })

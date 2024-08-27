@@ -12,15 +12,15 @@ type InvalidUnmarshalError struct {
 	Type reflect.Type
 }
 
-func (e *InvalidUnmarshalError) Error() string {
-	if e.Type == nil {
+func (err *InvalidUnmarshalError) Error() string {
+	if err.Type == nil {
 		return "fw: Unmarshal(nil)"
 	}
 
-	if e.Type.Kind() != reflect.Ptr {
-		return "fw: Unmarshal(non-pointer " + e.Type.String() + ")"
+	if err.Type.Kind() != reflect.Ptr {
+		return "fw: Unmarshal(non-pointer " + err.Type.String() + ")"
 	}
-	return "fw: Unmarshal(nil " + e.Type.String() + ")"
+	return "fw: Unmarshal(nil " + err.Type.String() + ")"
 }
 
 // ErrIncorrectInputValue represents wrong input param

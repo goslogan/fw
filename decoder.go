@@ -16,71 +16,58 @@ const (
 
 // A Decoder reads and decodes fixed width data from an input stream.
 type Decoder struct {
-	scanner        *bufio.Scanner
-	lineTerminator []byte
-	fieldSeparator string
-	done           bool
-	headersParsed  bool
-	headersLength  int
-	skipHeaders    bool
-	lineNum        int
-	headers        map[string][]int
-	lastType       reflect.Type
-	lastSetter     structSetter
+	scanner          *bufio.Scanner
+	RecordTerminator []byte // RecordTerminator identifies the sequence of bytes used to indicate end of record
+	FieldSeparator   string // FieldSeparator is used to identify the characters between fields and also to trim those characters. It's used as part of a regular expression.
+	done             bool
+	headersParsed    bool
+	headersLength    int
+	SkipFirstRecord  bool // SetSkipFirstRecord can be used to set whether or not the first line is ignored
+	// By default, it is not skippedecoder. If SetColumns is called, headers will be skippedecoder.
+	// It may then be desirable to reset it. If SetColumns has been called, the headers
+	// will be read and discarded if SetSkipFirstRecord(true) is calledecoder.
+	lineNum    int
+	headers    map[string][]int
+	lastType   reflect.Type
+	lastSetter structSetter
 }
 
 // NewDecoder returns a new decoder that reads from r.
 func NewDecoder(r io.Reader) *Decoder {
 	dec := &Decoder{
-		scanner:        bufio.NewScanner(r),
-		lineTerminator: []byte("\n"),
-		fieldSeparator: " ",
+		scanner:          bufio.NewScanner(r),
+		RecordTerminator: []byte("\n"),
+		FieldSeparator:   " ",
 	}
 	dec.scanner.Split(dec.scan)
 	return dec
 }
 
-// Unmarshal decodes a buffer into the array pointed to by v
+// Unmarshal decodes a buffer into the array or structed pointed to by v
+// If v is not an array only the first record will be read
 func Unmarshal(buf []byte, v interface{}) error {
-	return NewDecoder(bytes.NewReader(buf)).Decode(v)
+	return UnmarshalReader(bytes.NewReader(buf), v)
 }
 
-// UnmarshalReader decodes a reader into the array pointed to by v
+// UnmarshalReader decodes an io.Reader into the array or structed pointed to by v
+// If v is not an array only the first record will be read
 func UnmarshalReader(r io.Reader, v interface{}) error {
 	return NewDecoder(r).Decode(v)
 }
 
-func (d *Decoder) scan(data []byte, atEOF bool) (advance int, token []byte, err error) {
-	if atEOF && len(data) == 0 {
-		return 0, nil, nil
-	}
-	if i := bytes.Index(data, d.lineTerminator); i >= 0 {
-		// We have a full newline-terminated line.
-		return i + len(d.lineTerminator), data[0:i], nil
-	}
-	// If we're at EOF, we have a final, non-terminated line. Return it.
-	if atEOF {
-		return len(data), data, nil
-	}
-	// Request more data.
-	return 0, nil, nil
-}
-
 // Decode reads from its input and stores the decoded data to the value
-// pointed to by v.
-//
-// v must point to a slice of structs (or pointers to structs)
+// pointed to by v. v may point to a struct or a slice of structs (or pointers to structs)
 //
 // Currently, the maximum decodable line length is bufio.MaxScanTokenSize-1. ErrTooLong
 // is returned if a line is encountered that too long to decode.
-func (d *Decoder) Decode(v interface{}) error {
+func (decoder *Decoder) Decode(v interface{}) error {
 
 	var (
 		err error
 		ok  bool
 	)
 
-	if d.done {
+	if decoder.done {
 		return fmt.Errorf("processing already complete")
 	}
 
@@ -104,11 +91,11 @@ func (d *Decoder) Decode(v interface{}) error {
 			return ErrIncorrectInputValue
 		}
 
-		if err := d.initialiseDecoder(); err != nil {
+		if err := decoder.parseHeaders(); err != nil {
 			return err
 		}
 
-		err, ok = d.readLines(rv)
+		err, ok = decoder.readLines(rv)
 
 	} else {
 
@@ -116,16 +103,16 @@ func (d *Decoder) Decode(v interface{}) error {
 			return ErrIncorrectInputValue
 		}
 
-		if err := d.initialiseDecoder(); err != nil {
+		if err := decoder.parseHeaders(); err != nil {
 			return err
 		}
 
-		err, ok = d.readLine(rv)
+		err, ok = decoder.readLine(rv)
 
 	}
 
-	if d.done && err == nil && !ok {
-		// d.done means we've reached the end of the file. err == nil && !ok
+	if decoder.done && err == nil && !ok {
+		// decoder.done means we've reached the end of the file. err == nil && !ok
 		// indicates that there was no data to read, so we propagate an io.EOF
 		// upwards so our caller knows there is no data left.
 		return io.EOF
@@ -134,21 +121,8 @@ func (d *Decoder) Decode(v interface{}) error {
 	return err
 }
 
-// Initialise setters and headers if required
-func (d *Decoder) initialiseDecoder() error {
-
-	if !d.headersParsed {
-		if err := d.parseHeaders(); err != nil {
-			return err
-		}
-		d.headersParsed = true
-	}
-
-	return nil
-}
-
 // At this point we *know* that v is a pointer to a slice.
-func (d *Decoder) readLines(slice reflect.Value) (error, bool) {
+func (decoder *Decoder) readLines(slice reflect.Value) (error, bool) {
 
 	structType := slice.Type().Elem()
 	if structType.Kind() == reflect.Pointer {
@@ -157,7 +131,7 @@ func (d *Decoder) readLines(slice reflect.Value) (error, bool) {
 
 	for {
 		nv := reflect.New(structType).Elem()
-		err, ok := d.readLine(nv)
+		err, ok := decoder.readLine(nv)
 		if err != nil {
 			return err, false
 		}
@@ -168,111 +142,119 @@ func (d *Decoder) readLines(slice reflect.Value) (error, bool) {
 				slice.Set(reflect.Append(slice, nv))
 			}
 		}
-		if d.done {
+		if decoder.done {
 			break
 		}
 	}
 	return nil, true
 
 }
-func (d *Decoder) readLine(item reflect.Value) (error, bool) {
+func (decoder *Decoder) readLine(item reflect.Value) (error, bool) {
 
-	ok := d.scanner.Scan()
+	ok := decoder.scanner.Scan()
 	if !ok {
-		if d.scanner.Err() != nil {
-			return d.scanner.Err(), false
+		if decoder.scanner.Err() != nil {
+			return decoder.scanner.Err(), false
 		}
 
-		d.done = true
+		decoder.done = true
 		return nil, false
 	}
 
-	d.lineNum++
-	line := d.scanner.Text()
+	decoder.lineNum++
+	line := decoder.scanner.Text()
 	lineLen := len([]rune(line))
 	t := item.Type()
 
-	if lineLen != d.headersLength {
-		return fmt.Errorf("wrong data length in line %d (%d != %d)", d.lineNum, lineLen, d.headersLength), false
+	if lineLen != decoder.headersLength {
+		return fmt.Errorf("wrong data length in line %d (%d != %d)", decoder.lineNum, lineLen, decoder.headersLength), false
 	}
 
-	if t != d.lastType {
+	if t != decoder.lastType {
 		var err error
-		d.lastType = t
-		d.lastSetter, err = cachedStructSetter(t, d.headers, d.fieldSeparator)
+		decoder.lastType = t
+		decoder.lastSetter, err = cachedStructSetter(t, decoder.headers, decoder.FieldSeparator)
 		if err != nil {
 			return err, false
 		}
 	}
 
-	return d.lastSetter(item, line), true
+	return decoder.lastSetter(item, line), true
 
 }
 
-func (d *Decoder) parseHeaders() error {
+func (decoder *Decoder) parseHeaders() error {
 
-	if d.headersParsed {
+	if decoder.headersParsed && !decoder.SkipFirstRecord {
 		return nil
 	}
 
-	headerRegexp, err := regexp.Compile(fmt.Sprintf(".+?(?:%s+|$)", d.fieldSeparator))
+	headerRegexp, err := regexp.Compile(fmt.Sprintf(".+?(?:%s+|$)", decoder.FieldSeparator))
 	if err != nil {
 		return err
 	}
 	// this won't fail if above didn't
-	trimRegexp, _ := regexp.Compile(fmt.Sprintf("%s+", d.fieldSeparator))
+	trimRegexp, _ := regexp.Compile(fmt.Sprintf("%s+", decoder.FieldSeparator))
 
-	ok := d.scanner.Scan()
+	ok := decoder.scanner.Scan()
 	if !ok {
-		if d.scanner.Err() != nil {
-			return d.scanner.Err()
+		if decoder.scanner.Err() != nil {
+			return decoder.scanner.Err()
 		}
 
-		d.done = true
+		decoder.done = true
 		return nil
 	}
-	d.lineNum++
+	decoder.lineNum++
 
-	if d.skipHeaders {
+	// this may be called just to consume the header...
+	if decoder.headersParsed && decoder.SkipFirstRecord {
 		return nil
 	}
 
-	line := d.scanner.Text()
-	d.headersLength = len([]rune(line))
+	line := decoder.scanner.Text()
+	decoder.headersLength = len([]rune(line))
 
 	indices := headerRegexp.FindAllStringIndex(line, -1)
-	d.headers = make(map[string][]int)
+	decoder.headers = make(map[string][]int)
 	for _, index := range indices {
 		header := line[index[0]:index[1]]
-		d.headers[trimRegexp.ReplaceAllString(header, "")] = index
+		decoder.headers[trimRegexp.ReplaceAllString(header, "")] = index
 	}
 
-	d.headersParsed = true
+	decoder.headersParsed = true
 	return nil
 }
 
-// SetLineTerminator sets the character(s) that will be used to terminate lines.
-//
-// The default value is "\n".
-func (d *Decoder) SetLineTerminator(lineTerminator []byte) {
-	if len(lineTerminator) > 0 {
-		d.lineTerminator = lineTerminator
+// SetHeaders overrides any headers parsed from the first line of input.
+// If decoder.SetHeaders is called , decoder.SkipFirstRecord is set to false.
+// If decoder.SkipFirstRecord is then set to true, the first line will be read
+// but not parsed
+func (decoder *Decoder) SetHeaders(headers map[string][]int) {
+	decoder.headers = headers
+
+	for _, v := range headers {
+		if v[1] > decoder.headersLength {
+			decoder.headersLength = v[1]
+		}
 	}
+
+	decoder.headersParsed = true
+	decoder.SkipFirstRecord = false
 }
 
-// SetFieldSeparator sets the character(s) that will be used to separate columns.
-//
-// The default value is a space.
-func (d *Decoder) SetFieldSeparator(fieldSeparator string) {
-	if fieldSeparator != "" {
-		d.fieldSeparator = fieldSeparator
+func (decoder *Decoder) scan(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	if atEOF && len(data) == 0 {
+		return 0, nil, nil
 	}
-}
-
-// SetSkipHeaders can be used to set whether or not the first line is ignored
-// By default, it is not skipped. If SetColumns is called, headers will be skipped.
-// It may then be desirable to reset it. If SetColumns has been called, the headers
-// will be read and discarded if SetSkipHeaders(true) is called.
-func (d *Decoder) SetSkipHeaders(skip bool) {
-	d.skipHeaders = skip
+	if i := bytes.Index(data, decoder.RecordTerminator); i >= 0 {
+		// We have a full newline-terminated line.
+		return i + len(decoder.RecordTerminator), data[0:i], nil
+	}
+	// If we're at EOF, we have a final, non-terminated line. Return it.
+	if atEOF {
+		return len(data), data, nil
+	}
+	// Request more data.
+	return 0, nil, nil
 }
