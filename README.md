@@ -1,9 +1,19 @@
-# Fixed width file parser (encoder/decoder) for GO (golang)
+# Fixed width file parser (decoder) for GO (golang)
 [![License](http://img.shields.io/:license-mit-blue.svg)](LICENSE)
-[![GoDoc](https://godoc.org/github.com/o1egl/fwencoder?status.svg)](https://godoc.org/github.com/o1egl/fwencoder)
-![Build Status](https://github.com/o1egl/fwencoder/actions/workflows/build.yml/badge.svg?branch=master)
-[![codecov](https://codecov.io/gh/o1egl/fwencoder/branch/master/graph/badge.svg?token=BPBYoYAeZ0)](https://codecov.io/gh/o1egl/fwencoder)
-[![Go Report Card](https://goreportcard.com/badge/github.com/o1egl/fwencoder)](https://goreportcard.com/report/github.com/o1egl/fwencoder)
+
+
+Updated library derived from [Oleg Lobanov's fwencoder](https://github.com/o1egl/fwencoder) with some aspects of [Ian Lopshire's go-fixedwidth](github.com/ianlopshire/go-fixedwidth)
+
+Ths version currently only decodes but has a few additional features.
+
+1. It supports the TextMarshaler/TextUnmarshaler interface
+2. It allows multiple calls to the decoder by allowing a pointer to a struct to be passed to it as well as a slice.
+3. It's slightly faster because it caches conversion functions
+4. It supports arbitrary record endings and field conversions 
+5. It allows the headers to be predefined by the caller 
+
+* It **does not** support JSON decoding for complex data structures.
+* **Encoding** is also unsupported. 
 
 This library is using to parse fixed-width table data like:
 
@@ -18,7 +28,7 @@ Chuck Norris    P.O. Box 872          77868    (713) 868-6003     10909300 19651
 To install the library use the following command:
 
 ```
-$ go get -u github.com/o1egl/fwencoder
+$ go get -u github.com/goslogan/fw
 ```
 
 ## Decoding example
@@ -35,47 +45,14 @@ type Person struct {
 	Bday        time.Time `column:"Birthday" format:"20060102"`
 }
 
-f, _ := os.Open("/path/to/file")
+input, _ := os.ReadFile("/path/to/file")
 defer f.Close
 
 var people []Person
-err := fwencoder.UnmarshalReader(f, &people)
+err := fw.Unmarshal(input, &people)
 ```
-
-You can also parse data from byte array:
+You can customise the decoder by initialising it separately:
 
 ```go
-b, _ := ioutil.ReadFile("/path/to/file")
-var people []Person
-err := fwencoder.Unmarshal(b, &people)
-```
-
-
-## Encoding example
-
-```go
-people := []Person{
-	Name: "John",
-	Address: "P.O. Box 872",
-	Phone: "(713) 868-6003", 
-	CreditLimit: 10909300,
-	Bday: "19651203"
-}
-
-b, err := Marshal(&people)
-fmt.Println(string(b))
-```
-
-or you can directly write to io.Writer
-
-```go
-people := []Person{
-	Name: "John",
-	Address: "P.O. Box 872",
-	Phone: "(713) 868-6003", 
-	CreditLimit: 10909300,
-	Bday: "19651203"
-}
-
-err := MarshalWriter(os.Stdout, &people)
-```
+input, _ := ioutil.ReadFile("/path/to/file")
+decoder := fw.NewDecoder(input)

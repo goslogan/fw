@@ -1,324 +1,260 @@
-package fwencoder
+package fw
 
 import (
 	"bufio"
 	"bytes"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"reflect"
 	"regexp"
-	"runtime"
-	"sort"
-	"strconv"
-	"strings"
-	"time"
 )
 
 const (
 	columnTagName = "column"
-	jsonTagName   = "json"
 	format        = "format"
 )
 
-type fwColumn struct {
-	name  string
-	start int
-	end   int
+// A Decoder reads and decodes fixed width data from an input stream.
+type Decoder struct {
+	scanner          *bufio.Scanner
+	RecordTerminator []byte // RecordTerminator identifies the sequence of bytes used to indicate end of record
+	FieldSeparator   string // FieldSeparator is used to identify the characters between fields and also to trim those characters. It's used as part of a regular expression.
+	done             bool
+	headersParsed    bool
+	headersLength    int
+	SkipFirstRecord  bool // SetSkipFirstRecord can be used to set whether or not the first line is ignored
+	// By default, it is not skippedecoder. If SetColumns is called, headers will be skippedecoder.
+	// It may then be desirable to reset it. If SetColumns has been called, the headers
+	// will be read and discarded if SetSkipFirstRecord(true) is calledecoder.
+	lineNum    int
+	headers    map[string][]int
+	lastType   reflect.Type
+	lastSetter structSetter
 }
 
-var (
-	// ErrIncorrectInputValue represents wrong input param
-	ErrIncorrectInputValue = errors.New("value is not a pointer to slice of structs")
-)
-
-// Unmarshal parses the fixed width table data and stores the result in the value pointed to by v.
-// If v is nil or not a pointer to slice of structs, Unmarshal returns an ErrIncorrectInputValue.
-//
-// To unmarshal raw data into a struct, Unmarshal tries to convert every column's data from string to
-// supported types (int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64, string, bool, time.Time).
-// It also supports slices and custom types by reading them as JSON.
-//
-// By default, Unmarshal tries to match column names to struct's field names. This behavior could be
-// overridden by `column` or `json` tags.
-//
-// By default, time.RFC3339 is used to parse time.Time data. To override this behavior use `format` tag.
-// For example:
-//
-//	type Person struct {
-//	    Name     string
-//	    BDate    time.Time `column:"Birthday" format:"2006/01/02"`
-//	    Postcode int       `json:"Zip"`
-//	}
-func Unmarshal(data []byte, v interface{}) error {
-	return UnmarshalReader(bytes.NewReader(data), v)
+// NewDecoder returns a new decoder that reads from r.
+func NewDecoder(r io.Reader) *Decoder {
+	dec := &Decoder{
+		scanner:          bufio.NewScanner(r),
+		RecordTerminator: []byte("\n"),
+		FieldSeparator:   " ",
+	}
+	dec.scanner.Split(dec.scan)
+	return dec
 }
 
-// UnmarshalReader behaves the same as Unmarshal, but reads data from io.Reader
+// Unmarshal decodes a buffer into the array or structed pointed to by v
+// If v is not an array only the first record will be read
+func Unmarshal(buf []byte, v interface{}) error {
+	return UnmarshalReader(bytes.NewReader(buf), v)
+}
+
+// UnmarshalReader decodes an io.Reader into the array or structed pointed to by v
+// If v is not an array only the first record will be read
+func UnmarshalReader(r io.Reader, v interface{}) error {
+	return NewDecoder(r).Decode(v)
+}
+
+// Decode reads from its input and stores the decoded data to the value
+// pointed to by v. v may point to a struct or a slice of structs (or pointers to structs)
 //
-//nolint:gocyclo
-func UnmarshalReader(reader io.Reader, v interface{}) (err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			if _, ok := r.(runtime.Error); ok {
-				panic(r)
-			}
-			err = r.(error)
+// Currently, the maximum decodable line length is bufio.MaxScanTokenSize-1. ErrTooLong
+// is returned if a line is encountered that too long to decode.
+func (decoder *Decoder) Decode(v interface{}) error {
+
+	var (
+		err error
+		ok  bool
+	)
+
+	if decoder.done {
+		return fmt.Errorf("processing already complete")
+	}
+
+	rv := reflect.ValueOf(v)
+
+	if rv.Kind() != reflect.Ptr || rv.IsNil() {
+		return ErrIncorrectInputValue
+	}
+
+	if rv.Kind() == reflect.Ptr {
+		rv = rv.Elem()
+	}
+
+	if rv.Kind() == reflect.Slice {
+
+		structType := rv.Type().Elem()
+		if structType.Kind() == reflect.Pointer {
+			structType = structType.Elem()
 		}
-	}()
+		if structType.Kind() != reflect.Struct {
+			return ErrIncorrectInputValue
+		}
 
-	sliceItemType := reflect.TypeOf(v)
-	if sliceItemType != nil && sliceItemType.Kind() == reflect.Ptr {
-		sliceItemType = sliceItemType.Elem()
+		if err := decoder.parseHeaders(); err != nil {
+			return err
+		}
+
+		err, ok = decoder.readLines(rv)
+
 	} else {
-		return ErrIncorrectInputValue
-	}
 
-	if sliceItemType.Kind() == reflect.Slice {
-		sliceItemType = sliceItemType.Elem()
-	} else {
-		return ErrIncorrectInputValue
-	}
-
-	slice := reflect.ValueOf(v)
-	if slice.Kind() == reflect.Ptr {
-		slice = slice.Elem()
-	}
-
-	slice.Set(slice.Slice(0, 0))
-
-	sliceType := sliceItemType
-	if sliceType.Kind() == reflect.Ptr {
-		sliceType = sliceType.Elem()
-	}
-
-	if sliceType.Kind() != reflect.Struct {
-		return ErrIncorrectInputValue
-	}
-
-	scanner := bufio.NewScanner(reader)
-	columnNames := getColumns(sliceType)
-	sort.Slice(columnNames, func(i, j int) bool {
-		return len([]rune(columnNames[i])) > len([]rune(columnNames[j]))
-	})
-	fieldsIndex := make(map[string]string)
-	isHeaderParsed := false
-	lineNum := 0
-	headersLength := 0
-	columns := make([]fwColumn, 0, len(columnNames))
-
-	for scanner.Scan() {
-		lineNum++
-		line := scanner.Text()
-		lineRunes := []rune(line)
-		if !isHeaderParsed {
-			isHeaderParsed = true
-			headersLength = len(lineRunes)
-			columns, err = parseHeaders(line, columnNames)
-			if err != nil {
-				return err
-			}
-			continue
-		}
-		if len(lineRunes) != headersLength {
-			return fmt.Errorf("wrong data length in line %d", lineNum)
+		if rv.Kind() != reflect.Struct {
+			return ErrIncorrectInputValue
 		}
 
-		for _, prnColumn := range columns {
-			fieldsIndex[prnColumn.name] = string(lineRunes[prnColumn.start:prnColumn.end])
+		if err := decoder.parseHeaders(); err != nil {
+			return err
 		}
 
-		newItem, err := createObject(fieldsIndex, sliceType)
-		if err != nil {
-			return fmt.Errorf("error in line %d: %w", lineNum, err)
-		}
-		if sliceItemType.Kind() != reflect.Ptr {
-			newItem = newItem.Elem()
-		}
-		slice.Set(reflect.Append(slice, newItem))
+		err, ok = decoder.readLine(rv)
+
 	}
 
-	return nil
+	if decoder.done && err == nil && !ok {
+		// decoder.done means we've reached the end of the file. err == nil && !ok
+		// indicates that there was no data to read, so we propagate an io.EOF
+		// upwards so our caller knows there is no data left.
+		return io.EOF
+	}
+
+	return err
 }
 
-func getRefName(field reflect.StructField) string {
-	if name, ok := field.Tag.Lookup(columnTagName); ok {
-		return name
-	}
-	if name, ok := field.Tag.Lookup(jsonTagName); ok {
-		return name
-	}
-	return field.Name
-}
+// At this point we *know* that v is a pointer to a slice.
+func (decoder *Decoder) readLines(slice reflect.Value) (error, bool) {
 
-func createObject(fieldsIndex map[string]string, t reflect.Type) (reflect.Value, error) {
-	sp := reflect.New(t)
-	s := sp.Elem()
-	fieldsCount := s.NumField()
-	for fieldIndex := 0; fieldIndex < fieldsCount; fieldIndex++ {
-		currentField := s.Field(fieldIndex)
-		typeField := s.Type().Field(fieldIndex)
-		refName := getRefName(typeField)
-
-		rawValue, ok := fieldsIndex[refName]
-		if !ok {
-			continue
-		}
-		if err := setFieldValue(currentField, typeField, rawValue); err != nil {
-			return s, err
-		}
+	structType := slice.Type().Elem()
+	if structType.Kind() == reflect.Pointer {
+		structType = structType.Elem()
 	}
-	return sp, nil
-}
 
-//nolint:gocyclo,funlen
-func setFieldValue(field reflect.Value, structField reflect.StructField, rawValue string) error {
-	rawValue = strings.TrimSpace(rawValue)
-	fieldKind := field.Type().Kind()
-	isPointer := fieldKind == reflect.Ptr
-	if isPointer {
-		fieldKind = field.Type().Elem().Kind()
-	}
-	//nolint:dupl
-	switch fieldKind {
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		value, err := strconv.ParseInt(rawValue, 10, 0)
+	for {
+		nv := reflect.New(structType).Elem()
+		err, ok := decoder.readLine(nv)
 		if err != nil {
-			return newCastingError(err, rawValue, structField)
+			return err, false
 		}
-		if isPointer {
-			v := reflect.New(field.Type().Elem())
-			if v.Elem().OverflowInt(value) {
-				return newOverflowError(value, structField)
-			}
-			v.Elem().SetInt(value)
-			field.Set(v)
-		} else {
-			if field.OverflowInt(value) {
-				return newOverflowError(value, structField)
-			}
-			field.SetInt(value)
-		}
-	case reflect.Float32, reflect.Float64:
-		value, err := strconv.ParseFloat(rawValue, 64)
-		if err != nil {
-			return newCastingError(err, rawValue, structField)
-		}
-		if isPointer {
-			v := reflect.New(field.Type().Elem())
-			if v.Elem().OverflowFloat(value) {
-				return newOverflowError(value, structField)
-			}
-			v.Elem().SetFloat(value)
-			field.Set(v)
-		} else {
-			if field.OverflowFloat(value) {
-				return newOverflowError(value, structField)
-			}
-			field.SetFloat(value)
-		}
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		value, err := strconv.ParseUint(rawValue, 10, 64)
-		if err != nil {
-			return newCastingError(err, rawValue, structField)
-		}
-		if isPointer {
-			v := reflect.New(field.Type().Elem())
-			if v.Elem().OverflowUint(value) {
-				return newOverflowError(value, structField)
-			}
-			v.Elem().SetUint(value)
-			field.Set(v)
-		} else {
-			if field.OverflowUint(value) {
-				return newOverflowError(value, structField)
-			}
-			field.SetUint(value)
-		}
-	case reflect.String:
-		if isPointer {
-			field.Set(reflect.ValueOf(&rawValue))
-		} else {
-			field.SetString(rawValue)
-		}
-	case reflect.Bool:
-		value, err := strconv.ParseBool(rawValue)
-		if err != nil {
-			return newCastingError(err, rawValue, structField)
-		}
-		if isPointer {
-			field.Set(reflect.ValueOf(&value))
-		} else {
-			field.SetBool(value)
-		}
-	case reflect.Struct:
-		if field.Type() == reflect.TypeOf(time.Time{}) || field.Type() == reflect.TypeOf(&time.Time{}) {
-			timeFormat, ok := structField.Tag.Lookup(format)
-			if !ok {
-				timeFormat = time.RFC3339
-			}
-			t, err := time.Parse(timeFormat, rawValue)
-			if err != nil {
-				return newCastingError(err, rawValue, structField)
-			}
-			if isPointer {
-				field.Set(reflect.ValueOf(&t))
+		if ok {
+			if slice.Type().Elem().Kind() == reflect.Pointer {
+				slice.Set(reflect.Append(slice, nv.Addr()))
 			} else {
-				field.Set(reflect.ValueOf(t))
+				slice.Set(reflect.Append(slice, nv))
 			}
-			return nil
 		}
-		fallthrough
-	default:
-		v := reflect.New(field.Type())
-		err := json.Unmarshal([]byte(rawValue), v.Interface())
-		if err != nil {
-			return fmt.Errorf(`can't unmarshal '"%s" to %v: %w`, rawValue, field.Type(), err)
+		if decoder.done {
+			break
 		}
-		field.Set(v.Elem())
 	}
+	return nil, true
+
+}
+func (decoder *Decoder) readLine(item reflect.Value) (error, bool) {
+
+	ok := decoder.scanner.Scan()
+	if !ok {
+		if decoder.scanner.Err() != nil {
+			return decoder.scanner.Err(), false
+		}
+
+		decoder.done = true
+		return nil, false
+	}
+
+	decoder.lineNum++
+	line := decoder.scanner.Text()
+	lineLen := len([]rune(line))
+	t := item.Type()
+
+	if lineLen != decoder.headersLength {
+		return fmt.Errorf("wrong data length in line %d (%d != %d)", decoder.lineNum, lineLen, decoder.headersLength), false
+	}
+
+	if t != decoder.lastType {
+		var err error
+		decoder.lastType = t
+		decoder.lastSetter, err = cachedStructSetter(t, decoder.headers, decoder.FieldSeparator)
+		if err != nil {
+			return err, false
+		}
+	}
+
+	return decoder.lastSetter(item, line), true
+
+}
+
+func (decoder *Decoder) parseHeaders() error {
+
+	if decoder.headersParsed && !decoder.SkipFirstRecord {
+		return nil
+	}
+
+	headerRegexp, err := regexp.Compile(fmt.Sprintf(".+?(?:%s+|$)", decoder.FieldSeparator))
+	if err != nil {
+		return err
+	}
+	// this won't fail if above didn't
+	trimRegexp, _ := regexp.Compile(fmt.Sprintf("%s+", decoder.FieldSeparator))
+
+	ok := decoder.scanner.Scan()
+	if !ok {
+		if decoder.scanner.Err() != nil {
+			return decoder.scanner.Err()
+		}
+
+		decoder.done = true
+		return nil
+	}
+	decoder.lineNum++
+
+	// this may be called just to consume the header...
+	if decoder.headersParsed && decoder.SkipFirstRecord {
+		return nil
+	}
+
+	line := decoder.scanner.Text()
+	decoder.headersLength = len([]rune(line))
+
+	indices := headerRegexp.FindAllStringIndex(line, -1)
+	decoder.headers = make(map[string][]int)
+	for _, index := range indices {
+		header := line[index[0]:index[1]]
+		decoder.headers[trimRegexp.ReplaceAllString(header, "")] = index
+	}
+
+	decoder.headersParsed = true
 	return nil
 }
 
-func newCastingError(err error, rawValue string, structField reflect.StructField) error {
-	return fmt.Errorf(`filed casting "%s" to "%s:%v": %w`, rawValue, structField.Name, structField.Type, err)
-}
+// SetHeaders overrides any headers parsed from the first line of input.
+// If decoder.SetHeaders is called , decoder.SkipFirstRecord is set to false.
+// If decoder.SkipFirstRecord is then set to true, the first line will be read
+// but not parsed
+func (decoder *Decoder) SetHeaders(headers map[string][]int) {
+	decoder.headers = headers
 
-func newOverflowError(value any, structField reflect.StructField) error {
-	return fmt.Errorf(`value %v is too big for field %s:%v`, value, structField.Name, structField.Type)
-}
-
-func getColumns(sType reflect.Type) []string {
-	fCount := sType.NumField()
-	columnNames := make([]string, 0, fCount)
-	for i := 0; i < fCount; i++ {
-		field := sType.Field(i)
-		column := getRefName(field)
-		columnNames = append(columnNames, column)
+	for _, v := range headers {
+		if v[1] > decoder.headersLength {
+			decoder.headersLength = v[1]
+		}
 	}
-	return columnNames
+
+	decoder.headersParsed = true
+	decoder.SkipFirstRecord = false
 }
 
-func parseHeaders(headerLine string, columnNames []string) ([]fwColumn, error) {
-	columns := make([]fwColumn, 0, len(columnNames))
-	for i := 0; i < len(columnNames); i++ {
-		colName := columnNames[i]
-		re, err := regexp.Compile(fmt.Sprintf("(%s *)", colName))
-		if err != nil {
-			return nil, fmt.Errorf("%s column parsing error: %w", colName, err)
-		}
-
-		loc := re.FindStringIndex(headerLine)
-		if loc == nil {
-			continue
-		}
-		col := fwColumn{
-			name:  colName,
-			start: loc[0],
-			end:   loc[1],
-		}
-		columns = append(columns, col)
+func (decoder *Decoder) scan(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	if atEOF && len(data) == 0 {
+		return 0, nil, nil
 	}
-	return columns, nil
+	if i := bytes.Index(data, decoder.RecordTerminator); i >= 0 {
+		// We have a full newline-terminated line.
+		return i + len(decoder.RecordTerminator), data[0:i], nil
+	}
+	// If we're at EOF, we have a final, non-terminated line. Return it.
+	if atEOF {
+		return len(data), data, nil
+	}
+	// Request more data.
+	return 0, nil, nil
 }
