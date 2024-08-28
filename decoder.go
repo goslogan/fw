@@ -1,3 +1,4 @@
+// Package fw defines a model for converting fixed width input data into Redis structs.
 package fw
 
 import (
@@ -15,17 +16,34 @@ const (
 )
 
 // A Decoder reads and decodes fixed width data from an input stream.
+// The caller can either define field sizes directly via [Decoder.SetHeaders] or they can be read
+// from the first line of input.
+//
+// # Annotations
+//
+// Structs are annotated with the name of the input field/column with the column annotation. Referencing a column
+// which does not exist will cause the field to be silently ignored during processing. Given the range of date/time
+// formats in data, [time.Time] fields are supported additionally by the format annotation which allows the template
+// for [time.ParseDate] to be provided.
+//
+// # Usable target structures
+//
+// The data structure passed to [Decoder.Decode] or [Unmarshal] must be a pointer to an existing slice or a pointer to a struct.
+// If a slice is provided, it must contain structs or pointers to structs. It can be empty. Data is appended to the slice.
+//
+// All basic go data types are supported automatically. As mentioned above [time.Time] is supported explicitly. Any other
+// data type must support the [encoding.TextUnmarshaler] interface.  Any other data type will cause an error to be returned.
 type Decoder struct {
 	scanner          *bufio.Scanner
-	RecordTerminator []byte // RecordTerminator identifies the sequence of bytes used to indicate end of record
-	FieldSeparator   string // FieldSeparator is used to identify the characters between fields and also to trim those characters. It's used as part of a regular expression.
+	RecordTerminator []byte // RecordTerminator identifies the sequence of bytes used to indicate end of record (default is "\n")
+	FieldSeparator   string // FieldSeparator is used to identify the characters between fields and also to trim those characters. It's used as part of a regular expression (default is a space)
 	done             bool
 	headersParsed    bool
 	headersLength    int
-	SkipFirstRecord  bool // SetSkipFirstRecord can be used to set whether or not the first line is ignored
-	// By default, it is not skippedecoder. If SetColumns is called, headers will be skippedecoder.
+	SkipFirstRecord  bool // SkipFirstRecord defines whether the first line should be ignored.
+	// By default, it is not skipped. If SetColumns is called, headers will be skipped.
 	// It may then be desirable to reset it. If SetColumns has been called, the headers
-	// will be read and discarded if SetSkipFirstRecord(true) is calledecoder.
+	// will be read and discarded if SkipFirstRecord is true
 	lineNum    int
 	headers    map[string][]int
 	lastType   reflect.Type
