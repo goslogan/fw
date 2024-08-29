@@ -51,6 +51,9 @@ var multiDataHeadless []byte
 //go:embed "testdata/different-record-end.txt"
 var differentRecord []byte
 
+//go:embed testdata/multi-line-blank.txt
+var blankLines []byte
+
 type DataSize struct {
 	Value float64
 	Units string
@@ -210,19 +213,19 @@ func TestBadInputs(t *testing.T) {
 
 	err := Unmarshal(nil, 1)
 	assert.NotNil(t, err)
-	assert.Contains(t, err.Error(), ErrIncorrectInputValue.Error())
+	assert.Contains(t, err.Error(), "input value is not a non-nil pointer to slice of structs or a pointer to a struct")
 
 	err = Unmarshal(nil, nil)
 	assert.NotNil(t, err)
-	assert.Contains(t, err.Error(), ErrIncorrectInputValue.Error())
+	assert.Contains(t, err.Error(), "input value is not a non-nil pointer to slice of structs or a pointer to a struct")
 
 	err = Unmarshal(nil, new(string))
 	assert.NotNil(t, err)
-	assert.Contains(t, err.Error(), ErrIncorrectInputValue.Error())
+	assert.Contains(t, err.Error(), "input value is not a non-nil pointer to slice of structs or a pointer to a struct")
 
 	err = Unmarshal(nil, &([]int{}))
 	assert.NotNil(t, err)
-	assert.Contains(t, err.Error(), ErrIncorrectInputValue.Error())
+	assert.Contains(t, err.Error(), "input value is not a non-nil pointer to slice of structs or a pointer to a struct")
 
 	err = Unmarshal([]byte("Float32\nhello  "), &([]A{}))
 	assert.NotNil(t, err)
@@ -355,4 +358,80 @@ func TestEndOfRecordMarker(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Len(t, obtained, 2)
 	assert.Equal(t, expected, obtained)
+}
+
+func TestIgnoreBlankRecords(t *testing.T) {
+
+	type C struct {
+		Alpha  string
+		Beta   string
+		Number float32
+		When   time.Time `column:"Date" format:"2006-01-02"`
+	}
+
+	expected := []C{
+		{Alpha: "𝜶", Beta: "Β", Number: 0.9, When: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)},
+		{Alpha: "Α", Beta: "β", Number: -1.4, When: time.Date(2024, 1, 9, 0, 0, 0, 0, time.UTC)},
+	}
+
+	t.Run("ignore", func(t *testing.T) {
+		decoder := NewDecoder(bytes.NewReader(blankLines))
+		decoder.IgnoreEmptyRecords = true
+		obtained := []C{}
+
+		err := decoder.Decode(&obtained)
+
+		assert.Nil(t, err)
+		assert.Len(t, obtained, 2)
+		assert.Equal(t, expected, obtained)
+	})
+
+	t.Run("don't ignore", func(t *testing.T) {
+		decoder := NewDecoder(bytes.NewReader(blankLines))
+		decoder.IgnoreEmptyRecords = false
+		obtained := []C{}
+
+		err := decoder.Decode(&obtained)
+
+		assert.NotNil(t, err)
+	})
+
+}
+
+func TestSkipLengthTest(t *testing.T) {
+
+	type C struct {
+		Alpha  string
+		Beta   string
+		Number float32
+		When   time.Time `column:"Date" format:"2006-01-02"`
+	}
+
+	expected := []C{
+		{Alpha: "𝜶", Beta: "Β", Number: 0.9, When: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)},
+		{Alpha: "Α", Beta: "β", Number: -1.4, When: time.Date(2024, 1, 9, 0, 0, 0, 0, time.UTC)},
+	}
+
+	t.Run("ignore", func(t *testing.T) {
+		decoder := NewDecoder(bytes.NewReader(blankLines))
+		decoder.IgnoreEmptyRecords = true
+		obtained := []C{}
+
+		err := decoder.Decode(&obtained)
+
+		assert.Nil(t, err)
+		assert.Len(t, obtained, 2)
+		assert.Equal(t, expected, obtained)
+	})
+
+	t.Run("don't ignore", func(t *testing.T) {
+		decoder := NewDecoder(bytes.NewReader(blankLines))
+		decoder.IgnoreEmptyRecords = false
+		obtained := []C{}
+
+		err := decoder.Decode(&obtained)
+
+		assert.NotNil(t, err)
+	})
+
 }

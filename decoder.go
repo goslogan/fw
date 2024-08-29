@@ -44,6 +44,10 @@ type Decoder struct {
 	// By default, it is not skipped. If SetColumns is called, headers will be skipped.
 	// It may then be desirable to reset it. If SetColumns has been called, the headers
 	// will be read and discarded if SkipFirstRecord is true
+	IgnoreEmptyRecords bool // IgnoreEmptyRecores can be set to true to so that empty records
+	// will not cause an invalid record length error
+	SkipLengthCheck bool // SkipLengthCheck can be set to true to allow records to have a different
+	// length to the headers. This should be set when the final field may be have been whitespace trimmed
 	lineNum    int
 	headers    map[string][]int
 	lastType   reflect.Type
@@ -85,6 +89,10 @@ func (decoder *Decoder) Decode(v interface{}) error {
 		ok  bool
 	)
 
+	if v == nil {
+		return &InvalidInputError{Type: nil}
+	}
+
 	if decoder.done {
 		return fmt.Errorf("processing already complete")
 	}
@@ -92,7 +100,7 @@ func (decoder *Decoder) Decode(v interface{}) error {
 	rv := reflect.ValueOf(v)
 
 	if rv.Kind() != reflect.Ptr || rv.IsNil() {
-		return ErrIncorrectInputValue
+		return &InvalidInputError{Type: rv.Type()}
 	}
 
 	if rv.Kind() == reflect.Ptr {
@@ -106,7 +114,7 @@ func (decoder *Decoder) Decode(v interface{}) error {
 			structType = structType.Elem()
 		}
 		if structType.Kind() != reflect.Struct {
-			return ErrIncorrectInputValue
+			return &InvalidInputError{Type: structType}
 		}
 
 		if err := decoder.parseHeaders(); err != nil {
@@ -118,7 +126,7 @@ func (decoder *Decoder) Decode(v interface{}) error {
 	} else {
 
 		if rv.Kind() != reflect.Struct {
-			return ErrIncorrectInputValue
+			return &InvalidInputError{Type: rv.Type()}
 		}
 
 		if err := decoder.parseHeaders(); err != nil {
@@ -169,23 +177,46 @@ func (decoder *Decoder) readLines(slice reflect.Value) (error, bool) {
 }
 func (decoder *Decoder) readLine(item reflect.Value) (error, bool) {
 
-	ok := decoder.scanner.Scan()
-	if !ok {
-		if decoder.scanner.Err() != nil {
-			return decoder.scanner.Err(), false
+	var (
+		t    reflect.Type
+		line string
+	)
+	for {
+		ok := decoder.scanner.Scan()
+		if !ok {
+			if decoder.scanner.Err() != nil {
+				return decoder.scanner.Err(), false
+			}
+
+			decoder.done = true
+			return nil, false
 		}
 
-		decoder.done = true
-		return nil, false
-	}
+		decoder.lineNum++
+		line = decoder.scanner.Text()
+		lineLen := len([]rune(line))
+		t = item.Type()
 
-	decoder.lineNum++
-	line := decoder.scanner.Text()
-	lineLen := len([]rune(line))
-	t := item.Type()
+		if lineLen == decoder.headersLength {
+			break
+		}
 
-	if lineLen != decoder.headersLength {
-		return fmt.Errorf("wrong data length in line %d (%d != %d)", decoder.lineNum, lineLen, decoder.headersLength), false
+		if lineLen == 0 && decoder.IgnoreEmptyRecords {
+			continue
+		}
+
+		if lineLen != decoder.headersLength && decoder.SkipLengthCheck {
+			break
+		}
+
+		if (lineLen == 0 && !decoder.IgnoreEmptyRecords) || (lineLen != decoder.headersLength && !decoder.SkipLengthCheck) {
+			return &InvalidLengthError{
+				Headers:       decoder.headers,
+				Line:          line,
+				LineNum:       decoder.lineNum,
+				HeadersLength: decoder.headersLength,
+			}, false
+		}
 	}
 
 	if t != decoder.lastType {
