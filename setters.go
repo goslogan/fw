@@ -77,7 +77,7 @@ func getFieldSetter(field reflect.StructField) (valueSetter, error) {
 			setter = boolSet
 		}
 	default:
-		err = newInvalidTypeError(field)
+		err = &InvalidTypeError{Field: field}
 	}
 
 	return setter, err
@@ -93,7 +93,7 @@ func createTimeSet(structField reflect.StructField) valueSetter {
 	return func(field reflect.Value, structField reflect.StructField, rawValue string) error {
 		t, err := time.Parse(timeFormat, rawValue)
 		if err != nil {
-			return newCastingError(err, rawValue, structField)
+			return &CastingError{Err: err, Value: rawValue, Field: structField}
 		}
 		field.Set(reflect.ValueOf(t))
 		return nil
@@ -110,7 +110,7 @@ func createTimeSetPointer(structField reflect.StructField) valueSetter {
 
 		t, err := time.Parse(timeFormat, rawValue)
 		if err != nil {
-			return newCastingError(err, rawValue, structField)
+			return &CastingError{Err: err, Value: rawValue, Field: structField}
 		}
 		field.Set(reflect.ValueOf(&t))
 		return nil
@@ -121,11 +121,11 @@ func uintSetPointer(field reflect.Value, structField reflect.StructField, rawVal
 	rawValue = strings.TrimSpace(rawValue)
 	value, err := strconv.ParseUint(rawValue, 10, 64)
 	if err != nil {
-		return newCastingError(err, rawValue, structField)
+		return &CastingError{Err: err, Value: rawValue, Field: structField}
 	}
 	v := reflect.New(field.Type().Elem())
 	if v.Elem().OverflowUint(value) {
-		return newOverflowError(value, structField)
+		return &OverflowError{Value: value, Field: structField}
 	}
 	v.Elem().SetUint(value)
 	field.Set(v)
@@ -136,11 +136,11 @@ func uintSet(field reflect.Value, structField reflect.StructField, rawValue stri
 	rawValue = strings.TrimSpace(rawValue)
 	value, err := strconv.ParseUint(rawValue, 10, 64)
 	if err != nil {
-		return newCastingError(err, rawValue, structField)
+		return &CastingError{Err: err, Value: rawValue, Field: structField}
 	}
 
 	if field.OverflowUint(value) {
-		return newOverflowError(value, structField)
+		return &OverflowError{Value: value, Field: structField}
 	}
 	field.SetUint(value)
 	return nil
@@ -149,11 +149,11 @@ func uintSet(field reflect.Value, structField reflect.StructField, rawValue stri
 func intSetPointer(field reflect.Value, structField reflect.StructField, rawValue string) error {
 	value, err := strconv.ParseInt(rawValue, 10, 0)
 	if err != nil {
-		return newCastingError(err, rawValue, structField)
+		return &CastingError{Err: err, Value: rawValue, Field: structField}
 	}
 	v := reflect.New(field.Type().Elem())
 	if v.Elem().OverflowInt(value) {
-		return newOverflowError(value, structField)
+		return &OverflowError{Value: value, Field: structField}
 	}
 	v.Elem().SetInt(value)
 	field.Set(v)
@@ -164,11 +164,11 @@ func intSetPointer(field reflect.Value, structField reflect.StructField, rawValu
 func intSet(field reflect.Value, structField reflect.StructField, rawValue string) error {
 	value, err := strconv.ParseInt(rawValue, 10, 0)
 	if err != nil {
-		return newCastingError(err, rawValue, structField)
+		return &CastingError{Err: err, Value: rawValue, Field: structField}
 	}
 
 	if field.OverflowInt(value) {
-		return newOverflowError(value, structField)
+		return &OverflowError{Value: value, Field: structField}
 	}
 	field.SetInt(value)
 
@@ -178,11 +178,11 @@ func intSet(field reflect.Value, structField reflect.StructField, rawValue strin
 func floatSetPointer(field reflect.Value, structField reflect.StructField, rawValue string) error {
 	value, err := strconv.ParseFloat(rawValue, 64)
 	if err != nil {
-		return newCastingError(err, rawValue, structField)
+		return &CastingError{Err: err, Value: rawValue, Field: structField}
 	}
 	v := reflect.New(field.Type().Elem())
 	if v.Elem().OverflowFloat(value) {
-		return newOverflowError(value, structField)
+		return &OverflowError{Value: value, Field: structField}
 	}
 	v.Elem().SetFloat(value)
 	field.Set(v)
@@ -193,11 +193,11 @@ func floatSetPointer(field reflect.Value, structField reflect.StructField, rawVa
 func floatSet(field reflect.Value, structField reflect.StructField, rawValue string) error {
 	value, err := strconv.ParseFloat(rawValue, 64)
 	if err != nil {
-		return newCastingError(err, rawValue, structField)
+		return &CastingError{Err: err, Value: rawValue, Field: structField}
 	}
 
 	if field.OverflowFloat(value) {
-		return newOverflowError(value, structField)
+		return &OverflowError{Value: value, Field: structField}
 	}
 	field.SetFloat(value)
 
@@ -218,7 +218,7 @@ func boolSet(field reflect.Value, structField reflect.StructField, rawValue stri
 
 	value, err := strconv.ParseBool(rawValue)
 	if err != nil {
-		return newCastingError(err, rawValue, structField)
+		return &CastingError{Err: err, Value: rawValue, Field: structField}
 	}
 	field.SetBool(value)
 	return nil
@@ -228,7 +228,7 @@ func boolSetPointer(field reflect.Value, structField reflect.StructField, rawVal
 
 	value, err := strconv.ParseBool(rawValue)
 	if err != nil {
-		return newCastingError(err, rawValue, structField)
+		return &CastingError{Err: err, Value: rawValue, Field: structField}
 	}
 	field.Set(reflect.ValueOf(&value))
 	return nil

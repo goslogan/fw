@@ -1,7 +1,6 @@
 package fw
 
 import (
-	"errors"
 	"fmt"
 	"reflect"
 )
@@ -23,18 +22,58 @@ func (err *InvalidUnmarshalError) Error() string {
 	return "fw: Unmarshal(nil " + err.Type.String() + ")"
 }
 
-// ErrIncorrectInputValue represents wrong input param
-var ErrIncorrectInputValue = errors.New("value is not a pointer to slice of structs or a pointer to a struct")
-
-// newInvalidTypeError represents a type we convert.
-func newInvalidTypeError(structField reflect.StructField) error {
-	return fmt.Errorf(`unable to create a converter for field "%s" for type "%v"`, structField.Name, structField.Type)
+// An InvalidLengthError describes the state of decoding when a data record
+// does not have the same length as the headers indicated.
+type InvalidLengthError struct {
+	Headers       map[string][]int
+	Line          string
+	LineNum       int
+	HeadersLength int
 }
 
-func newCastingError(err error, rawValue string, structField reflect.StructField) error {
-	return fmt.Errorf(`failed casting "%s" to "%s:%v": %w`, rawValue, structField.Name, structField.Type, err)
+func (err *InvalidLengthError) Error() string {
+	return fmt.Sprintf("wrong data length in line %d (%d != %d)",
+		err.LineNum, len(err.Line), err.HeadersLength)
+
 }
 
-func newOverflowError(value any, structField reflect.StructField) error {
-	return fmt.Errorf(`value %v is too big for field %s:%v`, value, structField.Name, structField.Type)
+// An InvalidInputError is returned when the input to Decode is not
+// usable
+type InvalidInputError struct {
+	Type reflect.Type
+}
+
+func (err *InvalidInputError) Error() string {
+	t := "<nil>"
+	if err.Type != nil {
+		t = err.Type.String()
+	}
+	return fmt.Sprintf("input value is not a non-nil pointer to slice of structs or a pointer to a struct: %s", t)
+}
+
+type InvalidTypeError struct {
+	Field reflect.StructField
+}
+
+func (err *InvalidTypeError) Error() string {
+	return fmt.Sprintf(`unable to create a converter for field "%s" for type "%v"`, err.Field.Name, err.Field.Type)
+}
+
+type CastingError struct {
+	Value string
+	Err   error
+	Field reflect.StructField
+}
+
+func (err *CastingError) Error() string {
+	return fmt.Sprintf(`failed casting "%s" to "%s:%v": %+v`, err.Value, err.Field.Name, err.Field.Type, err.Err)
+}
+
+type OverflowError struct {
+	Value interface{}
+	Field reflect.StructField
+}
+
+func (err *OverflowError) Error() string {
+	return fmt.Sprintf(`value %v is too big for field %s:%v`, err.Value, err.Field.Name, err.Field.Type)
 }
