@@ -21,11 +21,28 @@ var textUnmarshalerType = reflect.TypeOf(new(encoding.TextUnmarshaler)).Elem()
 func getFieldSetter(field reflect.StructField) (valueSetter, error) {
 
 	var setter valueSetter
+	var err error
 
 	fieldKind := field.Type.Kind()
 	isPointer := fieldKind == reflect.Ptr
 	if isPointer {
 		fieldKind = field.Type.Elem().Kind()
+	}
+
+	// Special case for time.Time because it implements TextUnmarshaler but we need more
+	// to handle the format annotation.
+	if field.Type == reflect.TypeOf(time.Time{}) || field.Type == reflect.TypeOf(&time.Time{}) {
+		if isPointer {
+			return createTimeSetPointer(field), nil
+		} else {
+			return createTimeSet(field), nil
+		}
+	}
+
+	if field.Type.Implements(textUnmarshalerType) {
+		return textUnmarshalerSet, nil
+	} else if reflect.PointerTo(field.Type).Implements(textUnmarshalerType) {
+		return textUnmarshalerSetPointer, nil
 	}
 
 	switch fieldKind {
@@ -59,27 +76,11 @@ func getFieldSetter(field reflect.StructField) (valueSetter, error) {
 		} else {
 			setter = boolSet
 		}
-	case reflect.Struct:
-		if field.Type == reflect.TypeOf(time.Time{}) || field.Type == reflect.TypeOf(&time.Time{}) {
-			if isPointer {
-				setter = createTimeSetPointer(field)
-			} else {
-				setter = createTimeSet(field)
-			}
-			return setter, nil
-		}
-		fallthrough
 	default:
-		if field.Type.Implements(textUnmarshalerType) {
-			setter = textUnmarshalerSet
-		} else if reflect.PointerTo(field.Type).Implements(textUnmarshalerType) {
-			setter = textUnmarshalerSetPointer
-		} else {
-			return nil, newInvalidTypeError(field)
-		}
+		err = newInvalidTypeError(field)
 	}
 
-	return setter, nil
+	return setter, err
 }
 
 func createTimeSet(structField reflect.StructField) valueSetter {
@@ -254,7 +255,7 @@ func textUnmarshalerSetPointer(field reflect.Value, structField reflect.StructFi
 func createStructSetter(st reflect.Type, indices map[string][]int, fieldSeparator string) (structSetter, error) {
 
 	nFields := st.NumField()
-	valueSetters := make([]func(reflect.Value, string) error, 0)
+	valueSetters := make([]func(reflect.Value, []rune) error, 0)
 	leftTrimmer := regexp.MustCompile("^" + fieldSeparator + "+")
 	rightTrimmer := regexp.MustCompile(fieldSeparator + "+$")
 
@@ -278,10 +279,11 @@ func createStructSetter(st reflect.Type, indices map[string][]int, fieldSeparato
 
 }
 
-func structSetterFunc(valueSetters []func(reflect.Value, string) error) func(item reflect.Value, line string) error {
+func structSetterFunc(valueSetters []func(reflect.Value, []rune) error) func(item reflect.Value, line string) error {
 	return func(item reflect.Value, line string) error {
+		lineRunes := []rune(line)
 		for _, setter := range valueSetters {
-			if err := setter(item, line); err != nil {
+			if err := setter(item, lineRunes); err != nil {
 				return err
 			}
 		}
@@ -289,11 +291,10 @@ func structSetterFunc(valueSetters []func(reflect.Value, string) error) func(ite
 	}
 }
 
-func valueSetterFunc(currentField reflect.StructField, idx, from, to int, leftTrimmer, rightTrimmer *regexp.Regexp, setter valueSetter) func(reflect.Value, string) error {
-	return func(v reflect.Value, rawValue string) error {
+func valueSetterFunc(currentField reflect.StructField, idx, from, to int, leftTrimmer, rightTrimmer *regexp.Regexp, setter valueSetter) func(reflect.Value, []rune) error {
+	return func(v reflect.Value, line []rune) error {
 		fieldVal := v.Field(idx)
-		lineRunes := []rune(rawValue)
-		fieldRunes := lineRunes[from:to]
+		fieldRunes := line[from:to]
 		rawField := leftTrimmer.ReplaceAllString(string(fieldRunes), "")
 		rawField = rightTrimmer.ReplaceAllString(rawField, "")
 		return setter(fieldVal, currentField, rawField)
