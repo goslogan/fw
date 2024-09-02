@@ -216,7 +216,8 @@ func stringSetPointer(field reflect.Value, structField reflect.StructField, rawV
 
 func boolSet(field reflect.Value, structField reflect.StructField, rawValue string) error {
 
-	value, err := strconv.ParseBool(rawValue)
+	value, err := parseBool(rawValue)
+
 	if err != nil {
 		return &CastingError{Err: err, Value: rawValue, Field: structField}
 	}
@@ -226,7 +227,7 @@ func boolSet(field reflect.Value, structField reflect.StructField, rawValue stri
 
 func boolSetPointer(field reflect.Value, structField reflect.StructField, rawValue string) error {
 
-	value, err := strconv.ParseBool(rawValue)
+	value, err := parseBool(rawValue)
 	if err != nil {
 		return &CastingError{Err: err, Value: rawValue, Field: structField}
 	}
@@ -307,6 +308,17 @@ func getRefName(field reflect.StructField) string {
 	}
 
 	return field.Name
+}
+
+func parseBool(str string) (bool, error) {
+	switch str {
+	case "yes", "YES", "Yes":
+		return true, nil
+	case "no", "NO", "No":
+		return false, nil
+	default:
+		return strconv.ParseBool(str)
+	}
 }
 
 var structSetterCache sync.Map // map[string]structSetter
